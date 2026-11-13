@@ -13,6 +13,8 @@ ROOT = Path("/workspace/admissions-helper")
 PORT = 8876
 BASE = f"http://127.0.0.1:{PORT}/"
 SAMPLE = ROOT / "test" / "sample-referral.pdf"
+SAMPLE_DOCX = ROOT / "test" / "sample-referral.docx"
+SAMPLE_TXT = ROOT / "test" / "sample-referral.txt"
 DOWNLOADS = ROOT / "test" / "downloads"
 
 
@@ -33,6 +35,137 @@ def start_server():
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     return httpd
+
+
+
+def drop_file(page, test_id, path, mime=""):
+    payload = list(path.read_bytes())
+    page.evaluate(
+        """([id, name, mime, data]) => {
+          const target = document.querySelector(`[data-testid="${id}"]`);
+          const dt = new DataTransfer();
+          const file = new File([new Uint8Array(data)], name, { type: mime });
+          dt.items.add(file);
+          const fire = (type) => {
+            const ev = new Event(type, { bubbles: true, cancelable: true, composed: true });
+            Object.defineProperty(ev, "dataTransfer", { value: dt });
+            target.dispatchEvent(ev);
+          };
+          target.classList.add("is-dragover");
+          fire("dragenter");
+          fire("dragover");
+          fire("drop");
+        }""",
+        [test_id, path.name, mime, payload],
+    )
+
+
+def expect_extracted(page, *, name, dob, hospital, diagnosis, payer=None, source_snippet=None):
+    expect(page.get_by_test_id("referral-dialog")).to_be_visible()
+    expect(page.get_by_test_id("extract-panel")).to_be_visible(timeout=15000)
+    expect(page.get_by_test_id("review-banner")).to_be_visible()
+    expect(page.get_by_test_id("referral-name")).to_have_value(name)
+    expect(page.get_by_test_id("referral-dob")).to_have_value(dob)
+    expect(page.get_by_test_id("referral-hospital")).to_have_value(hospital)
+    expect(page.get_by_test_id("referral-diagnosis")).to_have_value(diagnosis)
+    if payer:
+        expect(page.get_by_test_id("referral-payer")).to_have_value(payer)
+    if source_snippet:
+        expect(page.get_by_test_id("extract-text")).to_contain_text(source_snippet)
+
+
+def test_dashboard_drops_and_paste(page):
+    page.get_by_test_id("nav-dashboard").click()
+    expect(page.get_by_test_id("dash-dropzone")).to_be_visible()
+
+    drop_file(page, "dash-dropzone", SAMPLE, "application/pdf")
+    expect_extracted(
+        page,
+        name="Jane Marie Doe",
+        dob="1948-03-14",
+        hospital="Inland Valley Medical Center",
+        diagnosis="Right hip fracture, s/p ORIF",
+        payer="medicare-medicaid",
+        source_snippet="Jane Marie Doe",
+    )
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Jane Marie Doe")
+
+    page.get_by_test_id("nav-dashboard").click()
+    drop_file(
+        page,
+        "dash-dropzone",
+        SAMPLE_DOCX,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    expect_extracted(
+        page,
+        name="Robert Alan Chen",
+        dob="1955-01-22",
+        hospital="Arrowhead Regional Medical Center",
+        diagnosis="CVA with left-sided weakness",
+        payer="mco",
+        source_snippet="Robert Alan Chen",
+    )
+    assert page.get_by_test_id("need-pt").is_checked()
+    assert page.get_by_test_id("need-st").is_checked()
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Robert Alan Chen")
+
+    page.get_by_test_id("nav-dashboard").click()
+    drop_file(page, "dash-dropzone", SAMPLE_TXT, "text/plain")
+    expect_extracted(
+        page,
+        name="Maria Elena Santos",
+        dob="1943-08-09",
+        hospital="St. Bernardine Medical Center",
+        diagnosis="Pneumonia, deconditioning",
+        payer="medicaid",
+        source_snippet="Maria Elena Santos",
+    )
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Maria Elena Santos")
+
+    page.get_by_test_id("nav-dashboard").click()
+    page.get_by_test_id("dash-paste-toggle").click()
+    expect(page.get_by_test_id("dash-paste-panel")).to_be_visible()
+    page.get_by_test_id("dash-paste-text").fill(
+        "Patient Name: Anita Flores\n"
+        "Date of Birth: 04/02/1960\n"
+        "Referring Hospital: Community Hospital of San Bernardino\n"
+        "Primary Diagnosis: Left total knee arthroplasty\n"
+        "Insurance: Private insurance\n"
+        "Referral Date: 11/13/2026\n"
+        "Care Needs: PT, OT, wound care\n"
+    )
+    page.get_by_test_id("dash-paste-apply").click()
+    expect_extracted(
+        page,
+        name="Anita Flores",
+        dob="1960-04-02",
+        hospital="Community Hospital of San Bernardino",
+        diagnosis="Left total knee arthroplasty",
+        payer="private",
+        source_snippet="Anita Flores",
+    )
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Anita Flores")
+
+    # Unsupported older Word .doc stays on the dashboard with a clear error
+    page.get_by_test_id("nav-dashboard").click()
+    doc_path = DOWNLOADS / "old-referral.doc"
+    doc_path.write_bytes(b"this is not a real word document")
+    drop_file(page, "dash-dropzone", doc_path, "application/msword")
+    expect(page.get_by_test_id("dash-import-error")).to_be_visible()
+    expect(page.get_by_test_id("dash-import-error")).to_contain_text("Older Word .doc")
+    expect(page.get_by_test_id("referral-dialog")).not_to_be_visible()
+
+    page.get_by_test_id("nav-referrals").click()
+    page.get_by_test_id("search-input").fill("")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Jane Marie Doe")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Robert Alan Chen")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Maria Elena Santos")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Anita Flores")
 
 
 def add_manual_referral(page):
@@ -79,7 +212,7 @@ def add_pdf_referral(page):
     assert page.get_by_test_id("need-iv").is_checked()
     page.get_by_test_id("save-referral-btn").click()
     expect(page.get_by_test_id("view-detail")).to_contain_text("Jane Marie Doe")
-    expect(page.get_by_test_id("view-detail")).to_contain_text("Text saved from PDF")
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Text saved from the file")
 
 
 def move_statuses_and_checklist(page):
@@ -198,6 +331,7 @@ def main():
         page.goto(BASE)
         expect(page.get_by_role("heading", name="Admissions Tracker")).to_be_visible()
         expect(page.get_by_test_id("privacy-strip")).to_be_visible()
+        expect(page.get_by_test_id("dash-dropzone")).to_be_visible()
 
         add_manual_referral(page)
         add_pdf_referral(page)
@@ -207,6 +341,12 @@ def main():
         screenshots(page, context)
         test_persistence(page)
         clear_all(page)
+
+        test_dashboard_drops_and_paste(page)
+        page.get_by_test_id("nav-settings").click()
+        page.get_by_test_id("clear-confirm").fill("DELETE")
+        page.get_by_test_id("clear-all-btn").click()
+        expect(page.get_by_test_id("stat-new")).to_contain_text("0")
 
         # Mobile smoke: empty state after clear, then add one referral
         page.set_viewport_size({"width": 390, "height": 844})

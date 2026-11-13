@@ -9,7 +9,7 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 ## What you can do
 
 - Log a referral (name or initials, date of birth, hospital, diagnosis, payer, care needs, and notes)
-- Upload a referral PDF and review suggested fields pulled from its text (review before use)
+- Drop a referral PDF, Word file (.docx), or text onto the dashboard, or paste email text, then review suggested fields before you save
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
 - See today's expected admits, items still waiting on a decision, and a simple admission rate
@@ -20,7 +20,7 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 ## Privacy
 
 - Data is stored only in this browser (local storage). It is not synced to other devices unless you restore a backup file you saved yourself.
-- Uploaded PDFs are read on the device so text can be suggested into the form. The file itself is not saved or sent anywhere.
+- Referral PDFs, Word files (.docx), and text files are read on the device so text can be suggested into the form. The file itself is not saved or sent anywhere.
 - A passcode, if you set one, encrypts the stored copy on this device. If you forget it, that copy cannot be unlocked. Keep a backup in a safe place.
 - Prefer initials when a full name is not needed. Do not use this on a shared computer unless you lock it and understand that a backup file is still sensitive.
 
@@ -31,10 +31,10 @@ This is a personal tracker, not an official medical record, EHR, or insurance sy
 - It does not use an AI model and does not score clinical fit or project reimbursement.
 - It does not verify insurance eligibility or obtain authorization.
 - It does not connect to an EHR, hospital portal, or payer system.
-- It cannot read password-protected PDFs or most image-only scanned packets. Enter those by hand.
+- It cannot read password-protected PDFs, older Word .doc files, or most image-only scanned packets. Enter those by hand.
 
 ## Add it to your phone
 
 Open the link in your browser, then use Share or the browser menu and choose **Add to Home Screen**.
 
-pdf.js (Apache License 2.0) is included locally to read PDF text on the device.
+pdf.js (Apache License 2.0) is included locally to read PDF text on the device. Word (.docx) files are unpacked in the browser; nothing is sent to a server.

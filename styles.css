@@ -385,7 +385,7 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 .history li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
 .field { display: flex; flex-direction: column; gap: 5px; font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
 .field span.from-pdf::after {
-  content: " from PDF — review";
+  content: " from file — review";
   font-weight: 600;
   color: var(--amber);
   font-size: 0.72rem;
@@ -417,15 +417,59 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 .dialog-head { padding: 14px 16px 8px; }
 .dialog-actions { padding: 8px 16px 16px; }
 #referral-form { padding: 0 16px 8px; overflow: auto; max-height: calc(100dvh - 40px); }
-.upload-box {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--paper);
-  border-radius: 10px;
+.dropzone-card {
+  background: var(--card);
+  border: 2px dashed #b7d8d4;
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.dropzone-card.compact {
+  text-align: left;
   margin-bottom: 12px;
+  box-shadow: none;
+  padding: 14px;
+  background: var(--paper);
+}
+.dropzone-card.is-dragover {
+  border-color: var(--teal);
+  border-style: solid;
+  background: var(--teal-soft);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+.dropzone-inner { max-width: 640px; margin: 0 auto; }
+.dropzone-card.compact .dropzone-inner { max-width: none; margin: 0; }
+.dropzone-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+.dropzone-icon svg { width: 26px; height: 26px; }
+.dropzone-card.compact .dropzone-icon { display: none; }
+.dropzone-title { margin: 0 0 4px; font-weight: 700; font-size: 1.02rem; color: var(--ink); }
+.dropzone-actions { justify-content: center; margin-top: 10px; }
+.dropzone-card.compact .dropzone-actions { justify-content: flex-start; }
+.paste-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+.paste-panel .field { margin-bottom: 8px; }
+.paste-panel textarea { min-height: 110px; }
+#dash-import-error { margin: 10px 0 0; }
+@media (max-width: 720px) {
+  .dropzone-card { padding: 14px 12px; }
+  .dropzone-actions { width: 100%; }
+  .dropzone-actions .btn, .dropzone-actions .btn.primary { flex: 1; }
 }
 .review-banner {
   background: var(--amber-soft);

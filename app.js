@@ -555,7 +555,7 @@
           <ul class="history" data-testid="status-history">
             ${(r.statusHistory || []).map((h) => `<li><strong>${escapeHtml(statusLabel(h.status))}</strong> · ${escapeHtml(formatDateTime(h.at))}</li>`).join("")}
           </ul>
-          ${r.extractedText ? `<h2 style="margin-top:16px">Text saved from PDF</h2><p class="hint">${escapeHtml(r.extractedSourceName || "Referral PDF")} · review before use</p><pre class="extract-text">${highlightExtract(r.extractedText)}</pre>` : ""}
+          ${r.extractedText ? `<h2 style="margin-top:16px">Text saved from the file</h2><p class="hint">${escapeHtml(r.extractedSourceName || "Referral file")} · review before use</p><pre class="extract-text">${highlightExtract(r.extractedText)}</pre>` : ""}
           <div class="btn-row" style="margin-top:16px">
             <button type="button" class="btn danger" data-testid="delete-referral-btn" id="delete-referral-btn">Delete this referral</button>
           </div>
@@ -652,6 +652,9 @@
     $("#extract-text").textContent = "";
     $("#extract-source").textContent = "";
     $("#pdf-upload").value = "";
+    const dashInput = $("#dash-file-input");
+    if (dashInput) dashInput.value = "";
+    hidePastePanels();
     markPdfFields();
   }
 
@@ -879,99 +882,365 @@
     $("#extract-text").innerHTML = highlightExtract(extractRaw);
   }
 
-  async function onPdfUpload(ev) {
-    const file = ev.target.files && ev.target.files[0];
-    ev.target.value = "";
-    const err = $("#pdf-error");
-    err.hidden = true;
+  function hidePastePanels() {
+    const dash = $("#dash-paste-panel");
+    const dlg = $("#dialog-paste-panel");
+    if (dash) dash.hidden = true;
+    if (dlg) dlg.hidden = true;
+  }
+
+  function setImportError(message, where) {
+    const dashErr = $("#dash-import-error");
+    const dlgErr = $("#pdf-error");
+    if (dashErr) {
+      dashErr.hidden = !(where === "dash" && message);
+      dashErr.textContent = where === "dash" ? (message || "") : "";
+    }
+    if (dlgErr) {
+      dlgErr.hidden = !(where === "dialog" && message);
+      dlgErr.textContent = where === "dialog" ? (message || "") : "";
+    }
+  }
+
+  function fileKind(file) {
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    if (name.endsWith(".pdf") || type === "application/pdf") return "pdf";
+    if (name.endsWith(".docx") || type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
+    if (name.endsWith(".doc") || type === "application/msword") return "doc";
+    if (
+      name.endsWith(".txt") || name.endsWith(".csv") || name.endsWith(".md") || name.endsWith(".eml") ||
+      type.startsWith("text/") || type === "message/rfc822" || type === "text/csv"
+    ) return "text";
+    return "other";
+  }
+
+  function hasDragFiles(e) {
+    const types = e.dataTransfer && e.dataTransfer.types;
+    if (!types) return false;
+    return [...types].includes("Files") || [...types].includes("application/x-moz-file");
+  }
+
+  async function inflateRaw(bytes) {
+    if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot unpack Word files");
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    const buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async function unzipEntries(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const view = new DataView(arrayBuffer);
+    let eocd = -1;
+    const min = Math.max(0, bytes.length - 22 - 65535);
+    for (let i = bytes.length - 22; i >= min; i--) {
+      if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("That Word file could not be opened.");
+    const count = view.getUint16(eocd + 10, true);
+    let cd = view.getUint32(eocd + 16, true);
+    const files = {};
+    const decoder = new TextDecoder("utf-8");
+    for (let n = 0; n < count; n++) {
+      if (view.getUint32(cd, true) !== 0x02014b50) throw new Error("That Word file could not be opened.");
+      const method = view.getUint16(cd + 10, true);
+      const compSize = view.getUint32(cd + 20, true);
+      const nameLen = view.getUint16(cd + 28, true);
+      const extraLen = view.getUint16(cd + 30, true);
+      const commentLen = view.getUint16(cd + 32, true);
+      const localOff = view.getUint32(cd + 42, true);
+      const name = decoder.decode(bytes.subarray(cd + 46, cd + 46 + nameLen));
+      const locNameLen = view.getUint16(localOff + 26, true);
+      const locExtra = view.getUint16(localOff + 28, true);
+      const dataStart = localOff + 30 + locNameLen + locExtra;
+      const comp = bytes.subarray(dataStart, dataStart + compSize);
+      let data;
+      if (method === 0) data = comp;
+      else if (method === 8) data = await inflateRaw(comp);
+      else throw new Error("That Word file uses a format this tracker cannot read.");
+      files[name] = data;
+      cd += 46 + nameLen + extraLen + commentLen;
+    }
+    return files;
+  }
+
+  function docxXmlToText(xmlStr) {
+    const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
+    if (xml.querySelector("parsererror")) throw new Error("The Word document could not be read.");
+    const lines = [];
+
+    function paraText(p) {
+      let out = "";
+      (function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) return;
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const ln = node.localName;
+        if (ln === "t") out += node.textContent || "";
+        else if (ln === "tab") out += " ";
+        else if (ln === "br" || ln === "cr") out += " ";
+        else {
+          for (const child of node.childNodes) walk(child);
+        }
+      })(p);
+      return out.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").trim();
+    }
+
+    function collectParas(el, into) {
+      for (const child of el.children) {
+        if (child.localName === "tbl") continue;
+        if (child.localName === "p") into.push(child);
+        else collectParas(child, into);
+      }
+    }
+
+    function collectRows(tbl, into) {
+      for (const child of tbl.children) {
+        if (child.localName === "tr") into.push(child);
+        else if (child.localName === "tbl") continue;
+        else if (child.localName === "tc") continue;
+        else collectRows(child, into);
+      }
+    }
+
+    function rowText(tr) {
+      const cells = [];
+      for (const child of tr.children) {
+        if (child.localName !== "tc") continue;
+        const paras = [];
+        collectParas(child, paras);
+        cells.push(paras.map(paraText).filter(Boolean).join(" "));
+      }
+      return cells.join(" ").replace(/\s+/g, " ").trim();
+    }
+
+    function walkBlock(el) {
+      for (const child of el.children) {
+        const n = child.localName;
+        if (n === "p") {
+          const text = paraText(child);
+          if (text) lines.push(text);
+        } else if (n === "tbl") {
+          const rows = [];
+          collectRows(child, rows);
+          for (const tr of rows) {
+            const text = rowText(tr);
+            if (text) lines.push(text);
+          }
+        } else if (n === "sdt") {
+          const content = [...child.children].find((c) => c.localName === "sdtContent");
+          walkBlock(content || child);
+        } else if (n === "body" || n === "document" || n === "hdr" || n === "ftr") {
+          walkBlock(child);
+        }
+      }
+    }
+
+    const body = [...xml.getElementsByTagName("*")].find((n) => n.localName === "body") || xml.documentElement;
+    walkBlock(body);
+    return lines.join("\n").trim();
+  }
+
+  async function readDocxText(arrayBuffer) {
+    const files = await unzipEntries(arrayBuffer);
+    const entry = files["word/document.xml"];
+    if (!entry) throw new Error("That Word file did not contain a readable document.");
+    const xml = new TextDecoder("utf-8").decode(entry);
+    const text = docxXmlToText(xml);
+    if (!text) throw new Error("No readable text was found in that Word file. Enter the details by hand.");
+    return text;
+  }
+
+  async function readPdfText(arrayBuffer) {
+    if (typeof pdfjsLib === "undefined") throw new Error("PDF reader is missing");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+    const doc = await pdfjsLib.getDocument({ data: arrayBuffer, disableRange: true, disableStream: true }).promise;
+    const pages = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      let line = "";
+      let lastY = null;
+      const bits = [];
+      for (const item of content.items) {
+        const y = item.transform ? item.transform[5] : 0;
+        if (lastY != null && Math.abs(lastY - y) > 6) {
+          bits.push(line.trim());
+          line = "";
+        } else if (line && item.hasEOL) {
+          bits.push(line.trim());
+          line = "";
+        } else if (line && !line.endsWith(" ") && item.str && !item.str.startsWith(" ")) {
+          line += " ";
+        }
+        line += item.str || "";
+        lastY = y;
+        if (item.hasEOL) {
+          bits.push(line.trim());
+          line = "";
+        }
+      }
+      if (line.trim()) bits.push(line.trim());
+      pages.push(bits.filter(Boolean).join("\n"));
+    }
+    return pages.join("\n\n").trim();
+  }
+
+  function cleanupPlainText(text, filename) {
+    let t = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const isEmail = /\.eml$/i.test(filename || "") || (/^From:/m.test(t) && /^Subject:/m.test(t));
+    if (isEmail) {
+      const parts = t.split(/\n\n/);
+      if (parts.length > 1 && /^[\w-]+:/m.test(parts[0])) t = parts.slice(1).join("\n\n");
+      t = t.replace(/=\n/g, "");
+      t = t.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => {
+        try { return decodeURIComponent("%" + hex); } catch { return _; }
+      });
+    }
+    return t.trim();
+  }
+
+  async function readReferralFile(file) {
+    const kind = fileKind(file);
+    if (kind === "doc") {
+      throw new Error("Older Word .doc files cannot be read here. Please save the file as .docx, PDF, or plain text, or enter the details by hand.");
+    }
+    if (kind === "other") {
+      throw new Error("This file type is not supported. Drop a PDF, a Word file (.docx), or a text file (.txt, .csv, .md, or .eml).");
+    }
+    if (kind === "pdf") {
+      const text = await readPdfText(await file.arrayBuffer());
+      if (!text) throw new Error("No readable text was found. Scanned image-only PDFs cannot be read here. Enter the details by hand.");
+      return text;
+    }
+    if (kind === "docx") {
+      try {
+        return await readDocxText(await file.arrayBuffer());
+      } catch (err) {
+        if (err && /cannot be read|could not be opened|could not be read|did not contain|No readable text|cannot unpack/i.test(err.message || "")) throw err;
+        throw new Error("This Word file could not be read. Try saving it as .docx or PDF, or enter the details by hand.");
+      }
+    }
+    const text = cleanupPlainText(await file.text(), file.name);
+    if (!text) throw new Error("That text file was empty. Paste the referral text or enter the details by hand.");
+    return text;
+  }
+
+  function applyExtractedText(text, sourceName, toastMessage) {
+    extractRaw = text;
+    extractName = sourceName || "";
+    showExtract();
+    const guessed = extractFields(text);
+    filledFromPdf = new Set();
+    const apply = (id, key, value) => {
+      if (!value) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = value;
+      filledFromPdf.add(key);
+    };
+    apply("referral-name", "name", guessed.name);
+    apply("referral-dob", "dob", guessed.dob);
+    apply("referral-hospital", "hospital", guessed.hospital);
+    apply("referral-diagnosis", "diagnosis", guessed.diagnosis);
+    apply("referral-payer", "payer", guessed.payer);
+    apply("referral-payer-notes", "payerNotes", guessed.payerNotes);
+    if (guessed.dateReceived) apply("referral-date-received", "dateReceived", guessed.dateReceived);
+    if (guessed.expectedAdmitDate) apply("referral-expected-admit", "expectedAdmitDate", guessed.expectedAdmitDate);
+    if (guessed.notes && !$("#referral-notes").value) {
+      $("#referral-notes").value = guessed.notes;
+      filledFromPdf.add("notes");
+    }
+    for (const id of guessed.needs) {
+      const box = $(`[data-need="${id}"]`);
+      if (box) box.checked = true;
+    }
+    $("#review-banner").hidden = filledFromPdf.size === 0 && !guessed.needs.length;
+    markPdfFields();
+    toast(toastMessage || "The file was read on this device. Review before you save.");
+    const banner = $("#review-banner");
+    if (banner && !banner.hidden) banner.scrollIntoView({ block: "nearest" });
+  }
+
+  function dialogIsOpen() {
+    const dlg = $("#referral-dialog");
+    return !!(dlg && (dlg.open || dlg.hasAttribute("open")));
+  }
+
+  async function importReferralFile(file, source) {
     if (!file) return;
-    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
-      err.textContent = "Please choose a PDF file.";
-      err.hidden = false;
+    const where = source === "dash" && !dialogIsOpen() ? "dash" : "dialog";
+    setImportError("", "dash");
+    setImportError("", "dialog");
+    try {
+      const text = await readReferralFile(file);
+      if (where === "dash") openReferralForm();
+      applyExtractedText(text, file.name, "The file was read on this device. Review before you save.");
+    } catch (err) {
+      console.error(err);
+      let message = err && err.message ? err.message : "This file could not be read. Enter the details by hand.";
+      if (fileKind(file) === "pdf" && !/readable text|password|image-only|not supported/i.test(message)) {
+        message = "This PDF could not be read. It may be password-protected or image-only. Enter the details by hand.";
+      }
+      setImportError(message, where);
+    }
+  }
+
+  async function importPastedText(text, source) {
+    const cleaned = cleanupPlainText(text, "pasted.txt");
+    const where = source === "dash" && !dialogIsOpen() ? "dash" : "dialog";
+    setImportError("", "dash");
+    setImportError("", "dialog");
+    if (!cleaned) {
+      setImportError("Paste the referral text first.", where === "dash" ? "dash" : "dialog");
       return;
     }
-    try {
-      if (typeof pdfjsLib === "undefined") throw new Error("PDF reader is missing");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
-      const data = await file.arrayBuffer();
-      const doc = await pdfjsLib.getDocument({ data, disableRange: true, disableStream: true }).promise;
-      const pages = [];
-      for (let i = 1; i <= doc.numPages; i++) {
-        const page = await doc.getPage(i);
-        const content = await page.getTextContent();
-        let line = "";
-        let lastY = null;
-        const bits = [];
-        for (const item of content.items) {
-          const y = item.transform ? item.transform[5] : 0;
-          if (lastY != null && Math.abs(lastY - y) > 6) {
-            bits.push(line.trim());
-            line = "";
-          } else if (line && item.hasEOL) {
-            bits.push(line.trim());
-            line = "";
-          } else if (line && !line.endsWith(" ") && item.str && !item.str.startsWith(" ")) {
-            line += " ";
-          }
-          line += item.str || "";
-          lastY = y;
-          if (item.hasEOL) {
-            bits.push(line.trim());
-            line = "";
-          }
-        }
-        if (line.trim()) bits.push(line.trim());
-        pages.push(bits.filter(Boolean).join("\n"));
-      }
-      const text = pages.join("\n\n").trim();
-      if (!text) {
-        err.textContent = "No readable text was found. Scanned image-only PDFs cannot be read here. Enter the details by hand.";
-        err.hidden = false;
-        return;
-      }
-      extractRaw = text;
-      extractName = file.name;
-      showExtract();
-      const guessed = extractFields(text);
-      filledFromPdf = new Set();
-      const apply = (id, key, value) => {
-        if (!value) return;
-        const el = document.getElementById(id);
-        if (!el) return;
-        if (!el.value) {
-          el.value = value;
-          filledFromPdf.add(key);
-        } else if (el.value !== value) {
-          el.value = value;
-          filledFromPdf.add(key);
-        } else {
-          filledFromPdf.add(key);
-        }
-      };
-      apply("referral-name", "name", guessed.name);
-      apply("referral-dob", "dob", guessed.dob);
-      apply("referral-hospital", "hospital", guessed.hospital);
-      apply("referral-diagnosis", "diagnosis", guessed.diagnosis);
-      apply("referral-payer", "payer", guessed.payer);
-      apply("referral-payer-notes", "payerNotes", guessed.payerNotes);
-      if (guessed.dateReceived) apply("referral-date-received", "dateReceived", guessed.dateReceived);
-      if (guessed.expectedAdmitDate) apply("referral-expected-admit", "expectedAdmitDate", guessed.expectedAdmitDate);
-      if (guessed.notes && !$("#referral-notes").value) {
-        $("#referral-notes").value = guessed.notes;
-        filledFromPdf.add("notes");
-      }
-      for (const id of guessed.needs) {
-        const box = $(`[data-need="${id}"]`);
-        if (box) box.checked = true;
-      }
-      $("#review-banner").hidden = filledFromPdf.size === 0 && !guessed.needs.length;
-      markPdfFields();
-      toast("PDF text was read on this device. Review before you save.");
-    } catch (e) {
-      console.error(e);
-      err.textContent = "This PDF could not be read. It may be password-protected or image-only. Enter the details by hand.";
-      err.hidden = false;
-    }
+    if (where === "dash") openReferralForm();
+    hidePastePanels();
+    applyExtractedText(cleaned, "Pasted text", "The pasted text was read on this device. Review before you save.");
+  }
+
+  function bindDropzone(el, onFile) {
+    if (!el) return;
+    let enter = 0;
+    el.addEventListener("dragenter", (e) => {
+      if (!hasDragFiles(e)) return;
+      e.preventDefault();
+      enter += 1;
+      el.classList.add("is-dragover");
+    });
+    el.addEventListener("dragover", (e) => {
+      if (!hasDragFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      el.classList.add("is-dragover");
+    });
+    el.addEventListener("dragleave", (e) => {
+      if (!hasDragFiles(e) && enter === 0) return;
+      enter = Math.max(0, enter - 1);
+      if (enter === 0) el.classList.remove("is-dragover");
+    });
+    el.addEventListener("drop", (e) => {
+      if (!hasDragFiles(e) && !(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      enter = 0;
+      el.classList.remove("is-dragover");
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) onFile(file);
+    });
+  }
+
+  function onPdfUpload(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    importReferralFile(file, "dialog");
+  }
+
+  function onDashFile(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    importReferralFile(file, "dash");
   }
 
   function renderSettings() {
@@ -1060,6 +1329,15 @@
     window.__weesheePass = "";
     $("#clear-confirm").value = "";
     selectedId = null;
+    searchQuery = "";
+    filterStatus = "";
+    filterPayer = "";
+    const search = $("#search-input");
+    const status = $("#filter-status");
+    const payer = $("#filter-payer");
+    if (search) search.value = "";
+    if (status) status.value = "";
+    if (payer) payer.value = "";
     showView("dashboard");
     renderAll();
     toast("All data on this device was cleared");
@@ -1144,6 +1422,23 @@
     $("#cancel-referral-btn").addEventListener("click", closeReferralForm);
     $("#referral-form").addEventListener("submit", saveReferral);
     $("#pdf-upload").addEventListener("change", onPdfUpload);
+    $("#dash-file-input").addEventListener("change", onDashFile);
+    bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"));
+    bindDropzone($("#dialog-dropzone"), (file) => importReferralFile(file, "dialog"));
+    document.addEventListener("dragover", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
+    document.addEventListener("drop", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
+    $("#dash-paste-toggle").addEventListener("click", () => {
+      const panel = $("#dash-paste-panel");
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) $("#dash-paste-text").focus();
+    });
+    $("#dialog-paste-toggle").addEventListener("click", () => {
+      const panel = $("#dialog-paste-panel");
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) $("#dialog-paste-text").focus();
+    });
+    $("#dash-paste-apply").addEventListener("click", () => importPastedText($("#dash-paste-text").value, "dash"));
+    $("#dialog-paste-apply").addEventListener("click", () => importPastedText($("#dialog-paste-text").value, "dialog"));
     $("#search-input").addEventListener("input", () => { searchQuery = $("#search-input").value; renderReferrals(); });
     $("#filter-status").addEventListener("change", () => { filterStatus = $("#filter-status").value; renderReferrals(); });
     $("#filter-payer").addEventListener("change", () => { filterPayer = $("#filter-payer").value; renderReferrals(); });

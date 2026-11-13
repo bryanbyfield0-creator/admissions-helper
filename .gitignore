@@ -5,3 +5,4 @@ node_modules/
 test/downloads/
 desktop.png
 mobile.png
+__pycache__/
