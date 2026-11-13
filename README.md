@@ -1,8 +1,8 @@
-# Weeshee Admissions Helper
+# Admissions Tracker
 
-A free, simple admissions helper for skilled nursing and rehab teams. It runs entirely in your browser. There is no sign-in and nothing to install.
+A free, simple admissions tracker for skilled nursing and rehab teams. It runs entirely in your browser. There is no sign-in and nothing to install.
 
-**Referral information stays on this device.** The helper does not upload patient or referral details to a server.
+**Referral information stays on this device.** The tracker does not upload patient or referral details to a server.
 
 Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 
@@ -24,7 +24,7 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 - A passcode, if you set one, encrypts the stored copy on this device. If you forget it, that copy cannot be unlocked. Keep a backup in a safe place.
 - Prefer initials when a full name is not needed. Do not use this on a shared computer unless you lock it and understand that a backup file is still sensitive.
 
-This is a personal helper, not an official medical record, EHR, or insurance system.
+This is a personal tracker, not an official medical record, EHR, or insurance system.
 
 ## What it does not do
 

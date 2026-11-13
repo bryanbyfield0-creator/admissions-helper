@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  // Keep the original key so referrals already saved in this browser still load after the rename.
   const STORAGE_KEY = "weeshee-admissions-v1";
   const STATUSES = [
     { id: "new", label: "New referral" },
@@ -990,11 +991,11 @@
 
   function exportJson() {
     const payload = {
-      app: "Weeshee Admissions Helper",
+      app: "Admissions Tracker",
       exportedAt: new Date().toISOString(),
       data: state,
     };
-    downloadFile(`weeshee-admissions-backup-${todayISO()}.json`, JSON.stringify(payload, null, 2), "application/json");
+    downloadFile(`admissions-tracker-backup-${todayISO()}.json`, JSON.stringify(payload, null, 2), "application/json");
     toast("JSON backup downloaded");
   }
 
@@ -1018,7 +1019,7 @@
         `${prog.done}/${prog.items}`, r.updatedAt,
       ].map(csvEscape).join(",");
     });
-    downloadFile(`weeshee-admissions-${todayISO()}.csv`, `${headers.join(",")}\n${rows.join("\n")}\n`, "text/csv");
+    downloadFile(`admissions-tracker-${todayISO()}.csv`, `${headers.join(",")}\n${rows.join("\n")}\n`, "text/csv");
     toast("CSV downloaded");
   }
 
@@ -1042,7 +1043,7 @@
       renderAll();
       toast("Backup restored on this device");
     } catch (e) {
-      toast("That file does not look like a Weeshee Admissions backup.");
+      toast("That file does not look like an Admissions Tracker backup.");
     }
   }
 

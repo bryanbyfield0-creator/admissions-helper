@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end tests for Weeshee Admissions Helper."""
+"""End-to-end tests for Admissions Tracker."""
 from __future__ import annotations
 
 import http.server
@@ -196,7 +196,7 @@ def main():
         page = context.new_page()
         page.on("dialog", lambda d: d.accept())
         page.goto(BASE)
-        expect(page.get_by_role("heading", name="Weeshee Admissions Helper")).to_be_visible()
+        expect(page.get_by_role("heading", name="Admissions Tracker")).to_be_visible()
         expect(page.get_by_test_id("privacy-strip")).to_be_visible()
 
         add_manual_referral(page)
