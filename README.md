@@ -1,0 +1,40 @@
+# Weeshee Admissions Helper
+
+A free, simple admissions helper for skilled nursing and rehab teams. It runs entirely in your browser. There is no sign-in and nothing to install.
+
+**Referral information stays on this device.** The helper does not upload patient or referral details to a server.
+
+Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
+
+## What you can do
+
+- Log a referral (name or initials, date of birth, hospital, diagnosis, payer, care needs, and notes)
+- Upload a referral PDF and review suggested fields pulled from its text (review before use)
+- Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
+- Work through an admission checklist with a progress bar
+- See today's expected admits, items still waiting on a decision, and a simple admission rate
+- Copy acceptance or decline messages and a daily admissions summary
+- Download a JSON or CSV backup, restore a backup, or clear everything
+- Optionally set a passcode that encrypts the copy stored in this browser
+
+## Privacy
+
+- Data is stored only in this browser (local storage). It is not synced to other devices unless you restore a backup file you saved yourself.
+- Uploaded PDFs are read on the device so text can be suggested into the form. The file itself is not saved or sent anywhere.
+- A passcode, if you set one, encrypts the stored copy on this device. If you forget it, that copy cannot be unlocked. Keep a backup in a safe place.
+- Prefer initials when a full name is not needed. Do not use this on a shared computer unless you lock it and understand that a backup file is still sensitive.
+
+This is a personal helper, not an official medical record, EHR, or insurance system.
+
+## What it does not do
+
+- It does not use an AI model and does not score clinical fit or project reimbursement.
+- It does not verify insurance eligibility or obtain authorization.
+- It does not connect to an EHR, hospital portal, or payer system.
+- It cannot read password-protected PDFs or most image-only scanned packets. Enter those by hand.
+
+## Add it to your phone
+
+Open the link in your browser, then use Share or the browser menu and choose **Add to Home Screen**.
+
+pdf.js (Apache License 2.0) is included locally to read PDF text on the device.

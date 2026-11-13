@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="description" content="Weeshee Admissions Helper — a private, in-browser helper for skilled nursing and rehab admissions. Referral information stays on this device." />
+  <meta name="application-name" content="Weeshee Admissions Helper" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta property="og:title" content="Weeshee Admissions Helper" />
+  <meta property="og:description" content="A private admissions helper that runs in your browser. Referral information stays on this device." />
+  <title>Weeshee Admissions Helper</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="favicon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="lock-screen" class="lock-screen" hidden data-testid="lock-screen">
+    <div class="lock-card">
+      <img src="favicon.svg" alt="" width="44" height="44" />
+      <h1>Weeshee Admissions Helper</h1>
+      <p>This copy is locked. Enter your passcode to open referrals stored on this device.</p>
+      <form id="unlock-form" data-testid="unlock-form" autocomplete="off">
+        <label class="field">
+          <span>Passcode</span>
+          <input type="password" id="unlock-passcode" data-testid="unlock-passcode" required autocomplete="current-password" />
+        </label>
+        <p class="form-error" id="unlock-error" data-testid="unlock-error" hidden></p>
+        <button type="submit" class="btn primary" data-testid="unlock-btn">Unlock</button>
+      </form>
+      <p class="hint">If you forgot the passcode, encrypted data on this device cannot be recovered. You can still start fresh after clearing site data, or restore a backup file if you have one.</p>
+    </div>
+  </div>
+
+  <div id="app">
+    <header class="top">
+      <div class="brand">
+        <img src="favicon.svg" alt="" width="32" height="32" />
+        <div>
+          <h1>Weeshee Admissions Helper</h1>
+          <p class="tagline">Private · stays on this device</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="btn" id="lock-now-btn" data-testid="lock-now-btn" hidden>Lock</button>
+        <button type="button" class="btn primary" id="new-referral-btn" data-testid="new-referral-btn">New referral</button>
+      </div>
+    </header>
+
+    <div class="privacy-strip" data-testid="privacy-strip" role="note">
+      Referral information stays in this browser on this device. Nothing is uploaded or sent to a server. This is a personal helper, not an official medical record or insurance system. Review anything pulled from a PDF before you use it.
+    </div>
+
+    <nav class="nav" aria-label="Main">
+      <button type="button" class="nav-btn active" data-view="dashboard" data-testid="nav-dashboard">Dashboard</button>
+      <button type="button" class="nav-btn" data-view="pipeline" data-testid="nav-pipeline">Pipeline</button>
+      <button type="button" class="nav-btn" data-view="referrals" data-testid="nav-referrals">Referrals</button>
+      <button type="button" class="nav-btn" data-view="settings" data-testid="nav-settings">Settings</button>
+    </nav>
+
+    <main>
+      <section id="view-dashboard" class="view" data-testid="view-dashboard">
+        <div class="stat-grid" id="stat-grid" data-testid="stat-grid"></div>
+        <div class="dash-grid">
+          <section class="card">
+            <h2>Today’s admits</h2>
+            <div id="today-admits" data-testid="today-admits"></div>
+          </section>
+          <section class="card">
+            <h2>Needs a decision</h2>
+            <p class="lead"><span id="awaiting-count" data-testid="awaiting-count">0</span> referrals are still new, in review, or waiting on insurance authorization.</p>
+            <div id="awaiting-list" data-testid="awaiting-list"></div>
+          </section>
+          <section class="card">
+            <h2>Admission rate</h2>
+            <p class="conversion" id="conversion-rate" data-testid="conversion-rate">—</p>
+            <p class="hint" id="conversion-detail">Accepted or admitted versus declined, among referrals with a decision.</p>
+          </section>
+        </div>
+        <div class="quick-row">
+          <button type="button" class="btn" id="copy-summary-btn" data-testid="copy-summary-btn">Copy daily summary</button>
+          <button type="button" class="btn" data-view-jump="pipeline">Open pipeline</button>
+        </div>
+      </section>
+
+      <section id="view-pipeline" class="view" hidden data-testid="view-pipeline">
+        <div class="board" id="pipeline-board" data-testid="pipeline-board"></div>
+      </section>
+
+      <section id="view-referrals" class="view" hidden data-testid="view-referrals">
+        <div class="list-toolbar">
+          <label class="search">
+            <span class="sr-only">Search referrals</span>
+            <input type="search" id="search-input" data-testid="search-input" placeholder="Search name, hospital, diagnosis, payer…" />
+          </label>
+          <label class="filter">
+            <span>Status</span>
+            <select id="filter-status" data-testid="filter-status">
+              <option value="">All statuses</option>
+            </select>
+          </label>
+          <label class="filter">
+            <span>Payer</span>
+            <select id="filter-payer" data-testid="filter-payer">
+              <option value="">All payers</option>
+            </select>
+          </label>
+        </div>
+        <div id="referral-list" data-testid="referral-list"></div>
+      </section>
+
+      <section id="view-detail" class="view" hidden data-testid="view-detail"></section>
+
+      <section id="view-settings" class="view" hidden data-testid="view-settings">
+        <div class="settings-stack">
+          <section class="card">
+            <h2>Facility</h2>
+            <label class="field">
+              <span>Facility or team name (used in messages)</span>
+              <input type="text" id="facility-name" data-testid="facility-name" placeholder="e.g. Valley Health and Rehab" maxlength="120" />
+            </label>
+            <button type="button" class="btn" id="save-facility-btn" data-testid="save-facility-btn">Save name</button>
+          </section>
+
+          <section class="card">
+            <h2>Optional passcode</h2>
+            <p class="hint">A passcode encrypts referral data in this browser. It is not a full security system, and it only protects the copy stored here. If you forget it, this device’s data cannot be unlocked. Keep a backup file in a safe place.</p>
+            <form id="passcode-form" data-testid="passcode-form" autocomplete="off">
+              <label class="field">
+                <span>New passcode</span>
+                <input type="password" id="new-passcode" data-testid="new-passcode" minlength="4" autocomplete="new-password" />
+              </label>
+              <label class="field">
+                <span>Confirm passcode</span>
+                <input type="password" id="confirm-passcode" data-testid="confirm-passcode" minlength="4" autocomplete="new-password" />
+              </label>
+              <div class="btn-row">
+                <button type="submit" class="btn primary" data-testid="set-passcode-btn">Set or change passcode</button>
+                <button type="button" class="btn" id="remove-passcode-btn" data-testid="remove-passcode-btn" hidden>Remove passcode</button>
+              </div>
+            </form>
+            <p class="ok" id="passcode-status" data-testid="passcode-status" hidden></p>
+          </section>
+
+          <section class="card">
+            <h2>Backup and export</h2>
+            <p class="hint">Download a copy before you clear the browser, switch computers, or change devices. Keep backups somewhere private. Imported files stay on this device only.</p>
+            <div class="btn-row">
+              <button type="button" class="btn primary" id="export-json-btn" data-testid="export-json-btn">Download JSON backup</button>
+              <button type="button" class="btn" id="export-csv-btn" data-testid="export-csv-btn">Download CSV</button>
+              <label class="btn file-btn">
+                Restore JSON backup
+                <input type="file" id="import-json" data-testid="import-json" accept="application/json,.json" hidden />
+              </label>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Privacy</h2>
+            <ul class="plain">
+              <li>This app runs only in your browser. There is no account and no server of ours that receives referrals.</li>
+              <li>Records are stored in this browser’s local storage. Clearing site data, using another browser, or using another device will not show the same list unless you restore a backup.</li>
+              <li>Uploaded referral PDFs are read on this device so the text can be suggested into the form. The PDF itself is not saved, and it is not sent anywhere.</li>
+              <li>This is not connected to an EHR, payer portal, or insurance eligibility system. It does not score clinical fit or estimate reimbursement.</li>
+              <li>Prefer initials instead of a full name when that is enough for your work.</li>
+            </ul>
+          </section>
+
+          <section class="card danger-card">
+            <h2>Clear all data</h2>
+            <p class="hint">This permanently deletes every referral stored in this browser, including encrypted copies. It cannot be undone unless you have a backup file.</p>
+            <label class="field">
+              <span>Type DELETE to confirm</span>
+              <input type="text" id="clear-confirm" data-testid="clear-confirm" autocomplete="off" />
+            </label>
+            <button type="button" class="btn danger" id="clear-all-btn" data-testid="clear-all-btn">Clear all data</button>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="referral-dialog" class="dialog" data-testid="referral-dialog">
+    <form id="referral-form" data-testid="referral-form" method="dialog">
+      <div class="dialog-head">
+        <h2 id="referral-dialog-title">New referral</h2>
+        <button type="button" class="icon-btn" id="close-referral-dialog" data-testid="close-referral-dialog" aria-label="Close">×</button>
+      </div>
+
+      <div class="upload-box">
+        <label class="btn">
+          Upload referral PDF
+          <input type="file" id="pdf-upload" data-testid="pdf-upload" accept="application/pdf,.pdf" hidden />
+        </label>
+        <p class="hint">Text is read on this device only. Suggested fields are a first pass — review before use.</p>
+      </div>
+
+      <div id="review-banner" class="review-banner" data-testid="review-banner" hidden>
+        Some fields were filled from the PDF. Please review them before you save.
+      </div>
+      <p class="form-error" id="pdf-error" data-testid="pdf-error" hidden></p>
+
+      <div class="form-grid">
+        <label class="field">
+          <span>Patient name or initials</span>
+          <input type="text" id="referral-name" data-testid="referral-name" required maxlength="120" placeholder="Initials are fine" />
+        </label>
+        <label class="field">
+          <span>Date of birth</span>
+          <input type="date" id="referral-dob" data-testid="referral-dob" />
+        </label>
+        <label class="field">
+          <span>Referral source / hospital</span>
+          <input type="text" id="referral-hospital" data-testid="referral-hospital" maxlength="160" />
+        </label>
+        <label class="field">
+          <span>Diagnosis</span>
+          <input type="text" id="referral-diagnosis" data-testid="referral-diagnosis" maxlength="240" />
+        </label>
+        <label class="field">
+          <span>Payer</span>
+          <select id="referral-payer" data-testid="referral-payer">
+            <option value="">Select payer</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Payer notes / plan</span>
+          <input type="text" id="referral-payer-notes" data-testid="referral-payer-notes" maxlength="160" placeholder="Plan name, auth #, etc." />
+        </label>
+        <label class="field">
+          <span>Date received</span>
+          <input type="date" id="referral-date-received" data-testid="referral-date-received" required />
+        </label>
+        <label class="field">
+          <span>Expected admit date</span>
+          <input type="date" id="referral-expected-admit" data-testid="referral-expected-admit" />
+        </label>
+      </div>
+
+      <fieldset class="needs">
+        <legend>Care needs</legend>
+        <div id="needs-fields" class="need-grid" data-testid="needs-fields"></div>
+      </fieldset>
+
+      <label class="field">
+        <span>Notes</span>
+        <textarea id="referral-notes" data-testid="referral-notes" rows="3" maxlength="4000"></textarea>
+      </label>
+
+      <div id="extract-panel" class="extract-panel" data-testid="extract-panel" hidden>
+        <div class="extract-head">
+          <h3>Text from PDF <span class="pill">Review before use</span></h3>
+          <span id="extract-source" class="hint" data-testid="extract-source"></span>
+        </div>
+        <pre id="extract-text" class="extract-text" data-testid="extract-text"></pre>
+      </div>
+
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="cancel-referral-btn" data-testid="cancel-referral-btn">Cancel</button>
+        <button type="submit" class="btn primary" id="save-referral-btn" data-testid="save-referral-btn">Save referral</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden data-testid="toast" role="status" aria-live="polite"></div>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
