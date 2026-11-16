@@ -15,6 +15,7 @@ BASE = f"http://127.0.0.1:{PORT}/"
 SAMPLE = ROOT / "test" / "sample-referral.pdf"
 SAMPLE_DOCX = ROOT / "test" / "sample-referral.docx"
 SAMPLE_TXT = ROOT / "test" / "sample-referral.txt"
+FIXTURES = ROOT / "test" / "fixtures"
 DOWNLOADS = ROOT / "test" / "downloads"
 
 
@@ -203,6 +204,13 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("referral-dob")).to_have_value("1948-03-14")
     expect(page.get_by_test_id("referral-hospital")).to_have_value("Inland Valley Medical Center")
     expect(page.get_by_test_id("referral-diagnosis")).to_have_value("Right hip fracture, s/p ORIF")
+    jane_dx = diagnosis_rows(page)
+    assert [r["description"] for r in jane_dx] == [
+        "Right hip fracture, s/p ORIF",
+        "Hypertension",
+        "Type 2 diabetes mellitus",
+    ], jane_dx
+    assert jane_dx[0]["primary"] is True
     expect(page.get_by_test_id("referral-payer")).to_have_value("medicare-medicaid")
     expect(page.get_by_test_id("referral-date-received")).to_have_value("2026-11-13")
     expect(page.get_by_test_id("referral-expected-admit")).to_have_value("2026-11-14")
@@ -213,6 +221,10 @@ def add_pdf_referral(page):
     page.get_by_test_id("save-referral-btn").click()
     expect(page.get_by_test_id("view-detail")).to_contain_text("Jane Marie Doe")
     expect(page.get_by_test_id("view-detail")).to_contain_text("Text saved from the file")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Right hip fracture, s/p ORIF")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Type 2 diabetes mellitus")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
 
 
 def move_statuses_and_checklist(page):
@@ -317,6 +329,83 @@ def screenshots(page, context):
     page.get_by_test_id("nav-dashboard").click()
 
 
+def diagnosis_rows(page):
+    rows = page.get_by_test_id("diagnosis-row")
+    out = []
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        out.append({
+            "code": row.get_by_test_id("diagnosis-code").input_value(),
+            "description": row.get_by_test_id("diagnosis-description").input_value(),
+            "primary": row.get_by_test_id("diagnosis-primary").is_checked(),
+        })
+    return out
+
+
+def test_multi_diagnosis_extraction(page):
+    page.get_by_test_id("nav-dashboard").click()
+    page.get_by_test_id("dash-paste-toggle").click()
+    expect(page.get_by_test_id("dash-paste-panel")).to_be_visible()
+    text = (FIXTURES / "code-then-desc.txt").read_text(encoding="utf-8")
+    page.get_by_test_id("dash-paste-text").fill(text)
+    page.get_by_test_id("dash-paste-apply").click()
+    expect_extracted(
+        page,
+        name="Helen C. Park",
+        dob="1941-02-11",
+        hospital="Desert Regional Medical Center",
+        diagnosis="E11.9 Type 2 diabetes mellitus without complications",
+        payer="medicare",
+        source_snippet="Helen C. Park",
+    )
+    rows = diagnosis_rows(page)
+    codes = [r["code"] for r in rows]
+    assert codes == ["E11.9", "I10", "N18.30", "Z99.81", "S72.001A"], codes
+    assert rows[0]["primary"] is True
+    assert "diabetes" in rows[0]["description"].lower()
+    assert any("hypertension" in r["description"].lower() for r in rows)
+    assert any(r["code"] == "S72.001A" and "femur" in r["description"].lower() for r in rows)
+
+    page.get_by_test_id("toast").evaluate("el => el.hidden = true")
+    page.wait_for_timeout(200)
+    page.locator("#referral-dialog").screenshot(path=str(ROOT / "diagnoses-form.png"))
+
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Helen C. Park")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("S72.001A")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Primary")
+    expect(page.get_by_test_id("accept-template")).to_contain_text("E11.9")
+    expect(page.get_by_test_id("accept-template")).to_contain_text("N18.30")
+
+    page.get_by_test_id("nav-referrals").click()
+    page.get_by_test_id("search-input").fill("S72.001A")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Helen C. Park")
+
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    page.get_by_test_id("nav-settings").click()
+    with page.expect_download() as csv_info:
+        page.get_by_test_id("export-csv-btn").click()
+    csv = csv_info.value
+    csv_path = DOWNLOADS / csv.suggested_filename
+    csv.save_as(str(csv_path))
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "Helen C. Park" in csv_text
+    assert "E11.9" in csv_text
+    assert "S72.001A" in csv_text
+    assert "Diagnoses" in csv_text
+
+    with page.expect_download() as json_info:
+        page.get_by_test_id("export-json-btn").click()
+    payload = json_info.value
+    json_path = DOWNLOADS / payload.suggested_filename
+    payload.save_as(str(json_path))
+    raw = json_path.read_text(encoding="utf-8")
+    assert "Helen C. Park" in raw
+    assert "S72.001A" in raw
+    assert '"diagnoses"' in raw
+
+
 def main():
     httpd = start_server()
     errors = []
@@ -348,6 +437,12 @@ def main():
         page.get_by_test_id("clear-all-btn").click()
         expect(page.get_by_test_id("stat-new")).to_contain_text("0")
 
+        test_multi_diagnosis_extraction(page)
+        page.get_by_test_id("nav-settings").click()
+        page.get_by_test_id("clear-confirm").fill("DELETE")
+        page.get_by_test_id("clear-all-btn").click()
+        expect(page.get_by_test_id("stat-new")).to_contain_text("0")
+
         # Mobile smoke: empty state after clear, then add one referral
         page.set_viewport_size({"width": 390, "height": 844})
         page.get_by_test_id("new-referral-btn").click()
@@ -364,6 +459,7 @@ def main():
     print("ALL TESTS PASSED")
     print("desktop:", ROOT / "desktop.png")
     print("mobile:", ROOT / "mobile.png")
+    print("diagnoses-form:", ROOT / "diagnoses-form.png")
 
 
 if __name__ == "__main__":

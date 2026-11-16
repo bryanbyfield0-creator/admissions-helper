@@ -1,0 +1,14 @@
+COMMUNITY HOSPITAL — POST-ACUTE REFERRAL PACKET
+Patient Name: Jane Marie Doe
+Date of Birth: 03/14/1948
+MRN: 0042187
+Referring Hospital: Inland Valley Medical Center
+Attending Physician: Dr. Luis Ramirez
+Referral Date: 11/13/2026
+Proposed Discharge Date: 11/14/2026
+Primary Diagnosis: Right hip fracture, s/p ORIF
+Secondary: Hypertension, Type 2 diabetes mellitus
+Insurance: Medicare Part A, Medicaid secondary
+Policy / MBI: 1EG4-TE5-MK72
+Care Needs: PT, OT, wound care, IV antibiotics
+Notes: Patient is medically stable for skilled nursing and rehab.

@@ -1,0 +1,14 @@
+POST-ACUTE REFERRAL
+
+Patient Name: Helen C. Park
+Date of Birth: 02/11/1941
+Referring Hospital: Desert Regional Medical Center
+Insurance: Medicare Part A
+Referral Date: 11/16/2026
+
+Primary Diagnosis: E11.9 Type 2 diabetes mellitus without complications
+Secondary Diagnoses:
+I10 Essential (primary) hypertension
+N18.30 Chronic kidney disease, stage 3a
+Z99.81 Dependence on supplemental oxygen
+S72.001A Fracture of unspecified part of neck of right femur, initial encounter

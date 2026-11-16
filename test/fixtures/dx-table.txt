@@ -1,0 +1,12 @@
+Patient Name: Ruth E. Alvarez
+Date of Birth: 05/30/1946
+Referring Facility: Loma Linda University Medical Center
+Insurance: Medicare Advantage
+
+Dx                          ICD-10
+Type 2 diabetes mellitus    E11.9
+Essential hypertension      I10
+CKD stage 3                 N18.30
+Dependence on oxygen        Z99.81
+
+Care Needs: PT, OT, oxygen

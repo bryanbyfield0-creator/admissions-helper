@@ -1,0 +1,13 @@
+Patient Name: Walter J. Ng
+DOB: 11/02/1935
+Referring Hospital: Pomona Valley Hospital Medical Center
+Insurance: Medicare, Medicaid secondary
+
+Principal Dx: E119 Type 2 diabetes mellitus without complications
+
+Problem List
+- E119 Type 2 diabetes mellitus without complications
+- I10 Essential hypertension
+- N1830 Chronic kidney disease, stage 3a
+- Z9981 Dependence on supplemental oxygen
+- History of fall with gait instability

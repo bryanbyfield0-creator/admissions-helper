@@ -48,21 +48,6 @@
     { id: "transport-arranged", label: "Transportation arranged" },
     { id: "special-needs", label: "Isolation / special needs reviewed" },
   ];
-  const NEED_KEYWORDS = [
-    { id: "pt", re: /\b(physical therapy|\bPT\b)\b/i },
-    { id: "ot", re: /\b(occupational therapy|\bOT\b)\b/i },
-    { id: "st", re: /\b(speech therapy|\bST\b|SLP)\b/i },
-    { id: "wound", re: /\bwound(?:\s*care|\s*vac)?\b/i },
-    { id: "iv", re: /\b(IV|intravenous)\b/i },
-    { id: "dialysis", re: /\bdialysis\b|\bhemodialysis\b|\bHD\b/i },
-    { id: "oxygen", re: /\boxygen\b|\bO2\b/i },
-    { id: "isolation", re: /\bisolation\b|\bcontact precautions\b|\bMRSA\b|\bC\.\s?diff/i },
-    { id: "trach", re: /\btrach(?:eostomy)?\b|\bventilator\b|\bvent\b/i },
-    { id: "tube", re: /\btube feeding\b|\bPEG\b|\bNG tube\b/i },
-    { id: "bariatric", re: /\bbariatric\b/i },
-    { id: "behavior", re: /\b1:1\b|\bbehavioral\b|\bwandering\b/i },
-  ];
-
   let state = emptyState();
   let cryptoKey = null;
   let currentView = "dashboard";
@@ -153,6 +138,7 @@
       dob: "",
       hospital: "",
       diagnosis: "",
+      diagnoses: [],
       payer: "",
       payerNotes: "",
       dateReceived: todayISO(),
@@ -320,7 +306,8 @@
       if (filterStatus && r.status !== filterStatus) return false;
       if (filterPayer && r.payer !== filterPayer) return false;
       if (!q) return true;
-      const hay = [r.name, r.hospital, r.diagnosis, payerLabel(r.payer), r.payerNotes, r.notes, (r.needs || []).map(needLabel).join(" ")].join(" ").toLowerCase();
+      const dxText = (r.diagnoses || []).map((d) => [d.code, d.description].filter(Boolean).join(" ")).join(" ");
+      const hay = [r.name, r.hospital, r.diagnosis, dxText, payerLabel(r.payer), r.payerNotes, r.notes, (r.needs || []).map(needLabel).join(" ")].join(" ").toLowerCase();
       return hay.includes(q);
     }).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
   }
@@ -488,6 +475,42 @@
     renderDetail();
   }
 
+  function referralDiagnoses(r) {
+    if (!r) return [];
+    if (Array.isArray(r.diagnoses) && r.diagnoses.length) {
+      return r.diagnoses.map((d) => ({
+        code: (d && d.code) || "",
+        description: (d && d.description) || "",
+        primary: !!(d && d.primary),
+      }));
+    }
+    if (r.diagnosis) return [{ code: "", description: r.diagnosis, primary: true }];
+    return [];
+  }
+
+  function formatDiagnosisText(item) {
+    return (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.formatDiagnosis)
+      ? AdmissionsExtract.formatDiagnosis(item)
+      : ((item && ((item.code && item.description) ? `${item.code} ${item.description}` : (item.code || item.description || ""))) || "");
+  }
+
+  function formatDiagnosesPlain(items) {
+    return (items || []).map(formatDiagnosisText).filter(Boolean).join("; ");
+  }
+
+  function diagnosesListHtml(items) {
+    if (!items || !items.length) return "";
+    const rows = items.map((d) => {
+      const code = d.code
+        ? `<span class="dx-code-pill">${escapeHtml(d.code)}</span>`
+        : `<span class="dx-missing">no code found</span>`;
+      const desc = escapeHtml(d.description || (d.code ? "" : "—"));
+      const pri = d.primary ? ` <span class="pill">Primary</span>` : "";
+      return `<li>${code}<span>${desc}</span>${pri}</li>`;
+    }).join("");
+    return `<div class="dx-detail" data-testid="diagnoses-detail"><strong>Diagnoses</strong><ul>${rows}</ul></div>`;
+  }
+
   function renderDetail() {
     const r = findReferral(selectedId);
     const view = $("#view-detail");
@@ -518,6 +541,7 @@
           <p><strong>Date of birth:</strong> ${escapeHtml(formatDate(r.dob))}</p>
           <p><strong>Hospital / source:</strong> ${escapeHtml(r.hospital || "—")}</p>
           <p><strong>Diagnosis:</strong> ${escapeHtml(r.diagnosis || "—")}</p>
+          ${diagnosesListHtml(referralDiagnoses(r))}
           <p><strong>Payer:</strong> ${escapeHtml(payerLabel(r.payer))}${r.payerNotes ? ` — ${escapeHtml(r.payerNotes)}` : ""}</p>
           <p><strong>Expected admit:</strong> ${escapeHtml(formatDate(r.expectedAdmitDate))}</p>
           <p><strong>Care needs:</strong> ${r.needs?.length ? r.needs.map((id) => escapeHtml(needLabel(id))).join(", ") : "None listed"}</p>
@@ -579,7 +603,9 @@
 
   function buildAcceptMessage(r) {
     const when = r.expectedAdmitDate ? ` on ${formatDate(r.expectedAdmitDate)}` : " (date to be confirmed)";
-    return `Hello,\n\nWe are pleased to accept the referral for ${r.name || "this patient"} from ${r.hospital || "your hospital"}. We can admit${when}. Please send any remaining records (H&P, medication list, and discharge summary) and confirm transportation.\n\nThank you,\n${facilityName()}`;
+    const dx = formatDiagnosesPlain(referralDiagnoses(r));
+    const dxBlock = dx ? `\n\nDiagnoses: ${dx}\n` : " ";
+    return `Hello,\n\nWe are pleased to accept the referral for ${r.name || "this patient"} from ${r.hospital || "your hospital"}. We can admit${when}.${dxBlock}Please send any remaining records (H&P, medication list, and discharge summary) and confirm transportation.\n\nThank you,\n${facilityName()}`;
   }
 
   function buildDeclineMessage(r) {
@@ -594,7 +620,10 @@
     const expected = state.referrals.filter((r) => r.expectedAdmitDate === today && r.status !== "declined");
     const awaiting = state.referrals.filter((r) => ["new", "reviewing", "pending-auth"].includes(r.status));
     const accepted = state.referrals.filter((r) => r.status === "accepted");
-    const line = (r) => `- ${r.name || "Untitled"} | ${r.hospital || "source n/a"} | ${payerLabel(r.payer)} | ${r.diagnosis || "dx n/a"}${r.expectedAdmitDate ? ` | expected ${formatDate(r.expectedAdmitDate)}` : ""}`;
+    const line = (r) => {
+      const dx = formatDiagnosesPlain(referralDiagnoses(r)) || r.diagnosis || "dx n/a";
+      return `- ${r.name || "Untitled"} | ${r.hospital || "source n/a"} | ${payerLabel(r.payer)} | ${dx}${r.expectedAdmitDate ? ` | expected ${formatDate(r.expectedAdmitDate)}` : ""}`;
+    };
     return `Daily admissions summary — ${formatDate(today)}\n${facilityName()}\n\nExpected admits today (${expected.length}):\n${expected.length ? expected.map(line).join("\n") : "- None"}\n\nAccepted, awaiting arrival (${accepted.length}):\n${accepted.length ? accepted.map(line).join("\n") : "- None"}\n\nStill in review or pending insurance auth (${awaiting.length}):\n${awaiting.length ? awaiting.map(line).join("\n") : "- None"}\n\nPipeline counts: New ${c.new}, Reviewing ${c.reviewing}, Pending auth ${c["pending-auth"]}, Accepted ${c.accepted}, Admitted ${c.admitted}, Declined ${c.declined}\n`;
   }
 
@@ -630,6 +659,102 @@
     toast("Referral deleted from this device");
   }
 
+  function diagnosisRowEl(item) {
+    const d = item || { code: "", description: "", primary: false };
+    const row = document.createElement("div");
+    row.className = "dx-row";
+    row.setAttribute("data-testid", "diagnosis-row");
+    row.innerHTML = `
+      <label class="dx-primary">
+        <input type="radio" name="dx-primary" class="dx-primary-input" data-testid="diagnosis-primary" ${d.primary ? "checked" : ""} />
+        Primary
+      </label>
+      <input type="text" class="dx-code" data-testid="diagnosis-code" maxlength="16" placeholder="ICD-10" value="${escapeHtml(d.code || "")}" autocomplete="off" spellcheck="false" />
+      <input type="text" class="dx-desc" data-testid="diagnosis-description" maxlength="400" placeholder="${d.code ? "Description" : "Description or no code found"}" value="${escapeHtml(d.description || "")}" />
+      <button type="button" class="btn small" data-remove-dx="1" data-testid="remove-diagnosis">Remove</button>
+    `;
+    return row;
+  }
+
+  function renderDiagnosisRows(items) {
+    const box = $("#diagnoses-list");
+    if (!box) return;
+    box.innerHTML = "";
+    const rows = items && items.length ? items : [{ code: "", description: "", primary: true }];
+    rows.forEach((d) => box.appendChild(diagnosisRowEl(d)));
+  }
+
+  function readDiagnosesList() {
+    return $$("#diagnoses-list [data-testid='diagnosis-row']").map((row) => {
+      const raw = (row.querySelector(".dx-code")?.value || "").trim();
+      const normalized = (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.normalizeIcd10Code)
+        ? AdmissionsExtract.normalizeIcd10Code(raw)
+        : raw.toUpperCase();
+      return {
+        code: normalized || raw.toUpperCase(),
+        description: (row.querySelector(".dx-desc")?.value || "").trim(),
+        primary: !!row.querySelector(".dx-primary-input")?.checked,
+      };
+    }).filter((d) => d.code || d.description);
+  }
+
+  function syncPrimaryDiagnosisField() {
+    const field = $("#referral-diagnosis");
+    if (!field) return;
+    const rows = $$("#diagnoses-list [data-testid='diagnosis-row']");
+    const primary = rows.find((row) => row.querySelector(".dx-primary-input")?.checked) || rows[0];
+    if (!primary) return;
+    const item = {
+      code: (primary.querySelector(".dx-code")?.value || "").trim().toUpperCase(),
+      description: (primary.querySelector(".dx-desc")?.value || "").trim(),
+    };
+    if (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.normalizeIcd10Code) {
+      item.code = AdmissionsExtract.normalizeIcd10Code(item.code) || item.code;
+    }
+    const text = formatDiagnosisText(item);
+    if (text) field.value = text;
+  }
+
+  function bindDiagnosesEditor() {
+    const list = $("#diagnoses-list");
+    const addBtn = $("#add-diagnosis-btn");
+    if (addBtn) addBtn.addEventListener("click", () => {
+      if (list) list.appendChild(diagnosisRowEl({ code: "", description: "", primary: false }));
+    });
+    if (!list) return;
+    list.addEventListener("click", (e) => {
+      const remove = e.target.closest("[data-remove-dx]");
+      if (!remove) return;
+      const row = remove.closest(".dx-row");
+      const rows = $$(".dx-row", list);
+      if (rows.length <= 1) {
+        const code = row.querySelector(".dx-code");
+        const desc = row.querySelector(".dx-desc");
+        const pri = row.querySelector(".dx-primary-input");
+        if (code) code.value = "";
+        if (desc) desc.value = "";
+        if (pri) pri.checked = true;
+      } else {
+        const wasPrimary = !!row.querySelector(".dx-primary-input")?.checked;
+        row.remove();
+        if (wasPrimary) {
+          const first = list.querySelector(".dx-primary-input");
+          if (first) first.checked = true;
+        }
+      }
+      syncPrimaryDiagnosisField();
+    });
+    list.addEventListener("change", (e) => {
+      if (e.target.classList.contains("dx-primary-input")) syncPrimaryDiagnosisField();
+    });
+    list.addEventListener("input", (e) => {
+      if (e.target.classList.contains("dx-code") || e.target.classList.contains("dx-desc")) {
+        const row = e.target.closest(".dx-row");
+        if (row?.querySelector(".dx-primary-input")?.checked) syncPrimaryDiagnosisField();
+      }
+    });
+  }
+
   function resetForm() {
     filledFromPdf = new Set();
     extractRaw = "";
@@ -640,6 +765,7 @@
     $("#referral-dob").value = "";
     $("#referral-hospital").value = "";
     $("#referral-diagnosis").value = "";
+    renderDiagnosisRows([]);
     $("#referral-payer").value = "";
     $("#referral-payer-notes").value = "";
     $("#referral-date-received").value = todayISO();
@@ -666,6 +792,7 @@
     $("#referral-dob").value = r.dob || "";
     $("#referral-hospital").value = r.hospital || "";
     $("#referral-diagnosis").value = r.diagnosis || "";
+    renderDiagnosisRows(referralDiagnoses(r));
     $("#referral-payer").value = r.payer || "";
     $("#referral-payer-notes").value = r.payerNotes || "";
     $("#referral-date-received").value = r.dateReceived || todayISO();
@@ -692,6 +819,8 @@
       const label = $(`label.field:has(#${id}) span`) || $(`#${id}`)?.closest("label")?.querySelector("span");
       if (label) label.classList.toggle("from-pdf", filledFromPdf.has(key));
     }
+    const dxLegend = $("#diagnoses-fieldset legend");
+    if (dxLegend) dxLegend.classList.toggle("from-pdf", filledFromPdf.has("diagnoses"));
   }
 
   function openReferralForm(editId) {
@@ -720,6 +849,7 @@
       dob: $("#referral-dob").value,
       hospital: $("#referral-hospital").value.trim(),
       diagnosis: $("#referral-diagnosis").value.trim(),
+      diagnoses: readDiagnosesList(),
       payer: $("#referral-payer").value,
       payerNotes: $("#referral-payer-notes").value.trim(),
       dateReceived: $("#referral-date-received").value || todayISO(),
@@ -759,84 +889,6 @@
     toast("Referral saved on this device");
   }
 
-  function normalizeDob(raw) {
-    if (!raw) return "";
-    const m = String(raw).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-    if (!m) return "";
-    let [, mm, dd, yy] = m;
-    if (yy.length === 2) yy = Number(yy) > 30 ? `19${yy}` : `20${yy}`;
-    return `${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
-  }
-
-  function pick(text, patterns) {
-    for (const re of patterns) {
-      const m = text.match(re);
-      if (m && m[1]) return cleanLine(m[1]);
-    }
-    return "";
-  }
-
-  function cleanLine(s) {
-    return s.replace(/\s+/g, " ").replace(/[•|]+/g, " ").trim().replace(/[,;.\s]+$/, "");
-  }
-
-  function guessPayer(text) {
-    const t = text.toLowerCase();
-    const hasMed = /medicare/.test(t);
-    const hasCaid = /medicaid|medi-cal|medi cal/.test(t);
-    if (hasMed && hasCaid) return { payer: "medicare-medicaid", notes: pickPlan(text) };
-    if (/medicare\s+advantage|\b(mco|hmo|ppo)\b/.test(t) && hasMed) return { payer: "mco", notes: pickPlan(text) };
-    if (hasMed) return { payer: "medicare", notes: pickPlan(text) };
-    if (hasCaid) return { payer: "medicaid", notes: pickPlan(text) };
-    if (/private pay|self[- ]pay/.test(t)) return { payer: "private-pay", notes: pickPlan(text) };
-    if (/insurance|payer|aetna|blue cross|united|cigna|humana/.test(t)) return { payer: "private", notes: pickPlan(text) };
-    return { payer: "", notes: pickPlan(text) };
-  }
-
-  function pickPlan(text) {
-    return pick(text, [
-      /Insurance\s*[:\-]\s*([^\n]+)/i,
-      /Payer\s*[:\-]\s*([^\n]+)/i,
-      /Plan\s*[:\-]\s*([^\n]+)/i,
-    ]);
-  }
-
-  function extractFields(text) {
-    const name = pick(text, [
-      /Patient\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-      /Resident\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-      /(?:^|\n)\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-    ]);
-    const dobRaw = pick(text, [
-      /Date\s*of\s*Birth\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /DOB\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]);
-    const hospital = pick(text, [
-      /Referring\s*(?:Hospital|Facility|Source)\s*[:\-]\s*([^\n]+)/i,
-      /Discharge\s*(?:From|Hospital)\s*[:\-]\s*([^\n]+)/i,
-      /Hospital\s*[:\-]\s*([^\n]+)/i,
-    ]);
-    const diagnosis = pick(text, [
-      /Primary\s*Diagnosis\s*[:\-]\s*([^\n]+)/i,
-      /Admitting\s*Diagnosis\s*[:\-]\s*([^\n]+)/i,
-      /Diagnosis\s*[:\-]\s*([^\n]+)/i,
-    ]);
-    const dateReceived = normalizeDob(pick(text, [
-      /Referral\s*Date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Date\s*Received\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Date\s*of\s*Referral\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]));
-    const expected = normalizeDob(pick(text, [
-      /Proposed\s*Discharge\s*Date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Expected\s*Admit(?:\s*Date)?\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Admit(?:\s*Date)?\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]));
-    const payerGuess = guessPayer(text);
-    const needs = NEED_KEYWORDS.filter((n) => n.re.test(text)).map((n) => n.id);
-    const notes = pick(text, [/Notes?\s*[:\-]\s*([^\n]{10,400})/i]);
-    return { name, dob: normalizeDob(dobRaw), hospital, diagnosis, dateReceived, expectedAdmitDate: expected, payer: payerGuess.payer, payerNotes: payerGuess.notes, needs, notes };
-  }
-
   function highlightExtract(text) {
     const ranges = [];
     const add = (re) => {
@@ -852,7 +904,14 @@
     add(/Date\s*of\s*Birth\s*[:\-]?[^\n]+/i);
     add(/DOB\s*[:\-]?[^\n]+/i);
     add(/Primary\s*Diagnosis\s*[:\-]?[^\n]+/i);
+    add(/Secondary\s*(?:Diagnos(?:is|es)|Dx)?\s*[:\-]?[^\n]*/i);
+    add(/Admitting\s*Diagnosis\s*[:\-]?[^\n]+/i);
+    add(/Problem\s*List\s*[:\-]?[^\n]*/i);
+    add(/Active\s*Diagnoses\s*[:\-]?[^\n]*/i);
     add(/Diagnosis\s*[:\-]?[^\n]+/i);
+    if (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.ICD_CODE_RE) {
+      add(AdmissionsExtract.ICD_CODE_RE);
+    }
     add(/Insurance\s*[:\-]?[^\n]+/i);
     add(/Payer\s*[:\-]?[^\n]+/i);
     add(/Referring\s*(?:Hospital|Facility|Source)\s*[:\-]?[^\n]+/i);
@@ -1129,7 +1188,7 @@
     extractRaw = text;
     extractName = sourceName || "";
     showExtract();
-    const guessed = extractFields(text);
+    const guessed = AdmissionsExtract.extractFields(text);
     filledFromPdf = new Set();
     const apply = (id, key, value) => {
       if (!value) return;
@@ -1142,6 +1201,8 @@
     apply("referral-dob", "dob", guessed.dob);
     apply("referral-hospital", "hospital", guessed.hospital);
     apply("referral-diagnosis", "diagnosis", guessed.diagnosis);
+    renderDiagnosisRows(guessed.diagnoses || []);
+    if (guessed.diagnoses && guessed.diagnoses.length) filledFromPdf.add("diagnoses");
     apply("referral-payer", "payer", guessed.payer);
     apply("referral-payer-notes", "payerNotes", guessed.payerNotes);
     if (guessed.dateReceived) apply("referral-date-received", "dateReceived", guessed.dateReceived);
@@ -1276,13 +1337,16 @@
 
   function exportCsv() {
     const headers = [
-      "Name", "DOB", "Hospital", "Diagnosis", "Payer", "Payer notes", "Date received",
+      "Name", "DOB", "Hospital", "Diagnosis", "Diagnoses", "Payer", "Payer notes", "Date received",
       "Expected admit", "Status", "Needs", "Notes", "Checklist complete", "Updated",
     ];
     const rows = state.referrals.map((r) => {
       const prog = checklistProgress(r);
+      const dxList = (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.formatDiagnosesList)
+        ? AdmissionsExtract.formatDiagnosesList(referralDiagnoses(r))
+        : formatDiagnosesPlain(referralDiagnoses(r));
       return [
-        r.name, r.dob, r.hospital, r.diagnosis, payerLabel(r.payer), r.payerNotes,
+        r.name, r.dob, r.hospital, r.diagnosis, dxList, payerLabel(r.payer), r.payerNotes,
         r.dateReceived, r.expectedAdmitDate, statusLabel(r.status),
         (r.needs || []).map(needLabel).join("; "), r.notes,
         `${prog.done}/${prog.items}`, r.updatedAt,
@@ -1421,6 +1485,7 @@
     $("#close-referral-dialog").addEventListener("click", closeReferralForm);
     $("#cancel-referral-btn").addEventListener("click", closeReferralForm);
     $("#referral-form").addEventListener("submit", saveReferral);
+    bindDiagnosesEditor();
     $("#pdf-upload").addEventListener("change", onPdfUpload);
     $("#dash-file-input").addEventListener("change", onDashFile);
     bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"));

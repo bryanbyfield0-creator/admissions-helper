@@ -1,0 +1,15 @@
+Patient Name: Clara M. Hughes
+Date of Birth: 09/21/1949
+Referring Hospital: Community Hospital of San Bernardino
+Room: A214
+Phone: (909) 555-0148
+Zip: 92404
+NPI: 1987654321
+MRN: 0042187
+Policy / MBI: 1EG4-TE5-MK72
+Referral Date: 11/16/2026
+
+Primary Diagnosis: Community-acquired pneumonia
+Medications: D5W at 75 mL/hr, vitamin B12 1000 mcg daily, metformin 500 mg BID, insulin q4h sliding scale
+Labs: A1C 7.2, B12 312, hemoglobin 11.4
+Notes: Family lives off Interstate I-10. Please call the room A214 if questions.

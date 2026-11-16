@@ -1,0 +1,13 @@
+SNF Referral
+
+Name: Samuel Ortega
+DOB: 07/08/1938
+Hospital: Riverside Community Hospital
+Payer: Medicaid
+
+Admitting Diagnosis: Acute on chronic systolic heart failure (I50.23)
+Active Diagnoses:
+1. Type 2 diabetes mellitus (E11.9)
+2. Chronic kidney disease, stage 3 (N18.30)
+3. Dependence on supplemental oxygen (Z99.81)
+4. Deconditioning

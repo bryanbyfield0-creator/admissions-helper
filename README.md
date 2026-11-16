@@ -8,8 +8,8 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 
 ## What you can do
 
-- Log a referral (name or initials, date of birth, hospital, diagnosis, payer, care needs, and notes)
-- Drop a referral PDF, Word file (.docx), or text onto the dashboard, or paste email text, then review suggested fields before you save
+- Log a referral (name or initials, date of birth, hospital, diagnosis, all diagnoses with ICD-10 codes when listed, payer, care needs, and notes)
+- Drop a referral PDF, Word file (.docx), or text onto the dashboard, or paste email text, then review suggested fields before you save. The tracker looks for every diagnosis and ICD-10-CM code in the text, not just the primary one.
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
 - See today's expected admits, items still waiting on a decision, and a simple admission rate
@@ -32,6 +32,7 @@ This is a personal tracker, not an official medical record, EHR, or insurance sy
 - It does not verify insurance eligibility or obtain authorization.
 - It does not connect to an EHR, hospital portal, or payer system.
 - It cannot read password-protected PDFs, older Word .doc files, or most image-only scanned packets. Enter those by hand.
+- It does not look up or validate codes against the official ICD-10-CM list. Review every suggested code and description.
 
 ## Add it to your phone
 
