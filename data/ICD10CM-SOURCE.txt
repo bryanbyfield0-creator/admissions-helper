@@ -1,0 +1,25 @@
+ICD-10-CM code set bundled with Admissions Tracker
+==================================================
+
+File: data/icd10cm-fy2027.tsv.gz
+
+This is a compact copy of the official CMS "ICD-10-CM Code Descriptions in
+Tabular Order" file for fiscal year 2027, which is the current U.S. diagnosis
+code set for discharges and encounters from October 1, 2026 through
+September 30, 2027. It was built from:
+
+  https://www.cms.gov/files/zip/2027-code-descriptions-tabular-order.zip
+  (linked from https://www.cms.gov/medicare/coding-billing/icd-10-codes)
+
+The zip was published by the Centers for Medicare & Medicaid Services. The
+order file (icd10cm_order_2027.txt) includes every category/header and every
+code that is valid for HIPAA-covered transactions, with the official long
+description and a billable/header flag.
+
+Rebuild (from a downloaded copy of that zip):
+
+  python3 scripts/build-icd10.py /path/to/icd10cm_order_2027.txt
+
+ICD-10-CM is maintained by the CDC/NCHS and distributed by CMS. This bundled
+file is provided so lookup can run entirely on the device; referral text is
+never sent to CMS or any other server.

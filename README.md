@@ -8,8 +8,8 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 
 ## What you can do
 
-- Log a referral (name or initials, date of birth, hospital, diagnosis, all diagnoses with ICD-10 codes when listed, payer, care needs, and notes)
-- Drop a referral PDF, Word file (.docx), or text onto the dashboard, or paste email text, then review suggested fields before you save. The tracker looks for every diagnosis and ICD-10-CM code in the text, not just the primary one.
+- Log a referral (name or initials, date of birth, hospital, diagnoses with ICD-10 codes, allergies, payer, care needs, and notes)
+- Drop a referral PDF, Word file (.docx), or text onto the dashboard, or paste email text, then review suggested fields before you save. The tracker finds every diagnosis and ICD-10-CM code in the text, suggests official codes when a diagnosis is listed without one, and captures allergies (including NKDA).
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
 - See today's expected admits, items still waiting on a decision, and a simple admission rate
@@ -20,7 +20,7 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 ## Privacy
 
 - Data is stored only in this browser (local storage). It is not synced to other devices unless you restore a backup file you saved yourself.
-- Referral PDFs, Word files (.docx), and text files are read on the device so text can be suggested into the form. The file itself is not saved or sent anywhere.
+- Referral PDFs, Word files (.docx), and text files are read on the device so text can be suggested into the form. The file itself is not saved or sent anywhere. ICD-10-CM lookup uses a copy of the official CMS code set stored with the app; referral text never leaves this device.
 - A passcode, if you set one, encrypts the stored copy on this device. If you forget it, that copy cannot be unlocked. Keep a backup in a safe place.
 - Prefer initials when a full name is not needed. Do not use this on a shared computer unless you lock it and understand that a backup file is still sensitive.
 
@@ -32,7 +32,7 @@ This is a personal tracker, not an official medical record, EHR, or insurance sy
 - It does not verify insurance eligibility or obtain authorization.
 - It does not connect to an EHR, hospital portal, or payer system.
 - It cannot read password-protected PDFs, older Word .doc files, or most image-only scanned packets. Enter those by hand.
-- It does not look up or validate codes against the official ICD-10-CM list. Review every suggested code and description.
+- Suggested ICD-10-CM codes come from the official CMS FY2027 code set bundled with the app, not from a live server. They are a starting point, not a coding decision. Review every suggested or document-listed code. The app does not confirm medical necessity or coding guidelines.
 
 ## Add it to your phone
 

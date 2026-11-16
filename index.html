@@ -276,10 +276,24 @@
 
       <fieldset class="diagnoses" id="diagnoses-fieldset" data-testid="diagnoses-fieldset">
         <legend>Diagnoses</legend>
-        <p class="hint">Every diagnosis found in the referral, with its ICD-10 code when one was listed. The primary diagnosis is also in the field above. You can edit, add, or remove rows before you save.</p>
+        <p class="hint">Every diagnosis found in the referral. Codes listed in the document are checked against the official ICD-10-CM set on this device. If a diagnosis has no code, a suggested code is filled in for you to verify. You can search by code or words and pick another match.</p>
         <div id="diagnoses-list" class="dx-list" data-testid="diagnoses-list"></div>
         <div class="btn-row">
           <button type="button" class="btn small" id="add-diagnosis-btn" data-testid="add-diagnosis-btn">Add diagnosis</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="allergies" id="allergies-fieldset" data-testid="allergies-fieldset">
+        <legend>Allergies <span class="allergy-safety-pill" data-testid="allergies-legend-badge">Safety</span></legend>
+        <p class="hint">Allergy information is safety-critical. Review it before you save. NKDA means no known allergies, which is different from a referral that never mentioned allergies.</p>
+        <div id="allergies-banner" class="allergy-banner" data-testid="allergies-banner" hidden></div>
+        <label class="allergy-nkda">
+          <input type="checkbox" id="allergies-nkda" data-testid="allergies-nkda" />
+          No known allergies (NKDA)
+        </label>
+        <div id="allergies-list" class="allergy-list" data-testid="allergies-list"></div>
+        <div class="btn-row">
+          <button type="button" class="btn small" id="add-allergy-btn" data-testid="add-allergy-btn">Add allergy</button>
         </div>
       </fieldset>
 
@@ -312,6 +326,7 @@
 
   <script src="vendor/pdf.min.js"></script>
   <script src="extract.js"></script>
+  <script src="icd10.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

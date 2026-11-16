@@ -381,6 +381,299 @@
     return out;
   }
 
+
+  const ALLERGY_HEADER_RE = /^(allergy\s+(?:list|intolerance|information)|allerg(?:y|ies)\s*\/\s*intolerances?|(?:drug|food|environmental|latex|known)\s+allerg(?:y|ies)|intolerances?|allerg(?:y|ies)|latex(?:\s+allerg(?:y|ies))?|environmental)\s*[:\-–]?\s*(.*)$/i;
+
+  const ALLERGY_TABLE_RE = /^(?=.*\b(allergen|allerg(?:y|ies)|substance|drug|agent)\b)(?=.*\b(reaction|severity|intolerance|type|comment|response)\b).{0,100}$/i;
+
+  const NKDA_RE = /^(?:nka|nkda|nkfa|nkaa|no\s+known\s+(?:drug\s+|food\s+|environmental\s+)?allerg(?:y|ies)|denies\s+(?:any\s+)?(?:known\s+)?allerg(?:y|ies)|no\s+allerg(?:y|ies)\s+(?:reported|listed|identified|noted)|none\s+known|none(?:\s+reported)?)$/i;
+
+  const SEVERITY_WORD_RE = /\b(mild|moderate|severe|life[- ]threatening|anaphylaxis|anaphylactic)\b/i;
+
+  const DRUG_ALLERGEN_RE = /\b(pcn|penicillin|penicillins|amox(?:icillin)?|ampicillin|augmentin|sulfa|sulfonamides?|bactrim|tmp-smx|codeine|morphine|oxycodone|hydrocodone|dilaudid|hydromorphone|aspirin|asa|ibuprofen|nsaids?|naproxen|iodine|contrast|lisinopril|enalapril|ace\s*inhibitors?|vancomycin|cipro(?:floxacin)?|levaquin|levofloxacin|heparin|warfarin|coumadin|statins?|atorvastatin|lidocaine|latex-free|prednisone|dilantin|phenytoin|keppra|levetiracetam|tramadol|demerol|meperidine|clindamycin|keflex|cephalexin|cefazolin|ancef|erythromycin|azithromycin|tetracycline|doxycycline|flagyl|metronidazole)\b/i;
+
+  const FOOD_ALLERGEN_RE = /\b(peanuts?|tree\s+nuts?|almonds?|walnuts?|cashews?|pecans?|shellfish|shrimp|crab|lobster|fish|milk|dairy|eggs?|wheat|gluten|soy|sesame|strawberr(?:y|ies)|chocolate)\b/i;
+
+  const ENV_ALLERGEN_RE = /\b(pollen|dust(?:\s+mites?)?|mold|grass(?:es)?|ragweed|cat(?:s|\s+dander)?|dog(?:s|\s+dander)?|pet\s+dander|bees?|wasps?|hornets?|latex(?:\s+free)?)\b/i;
+
+  function allergyTypeFromHeader(header) {
+    const h = String(header || "").toLowerCase();
+    if (/drug/.test(h)) return "drug";
+    if (/food/.test(h)) return "food";
+    if (/environmental/.test(h)) return "environmental";
+    if (/latex/.test(h)) return "latex";
+    return "";
+  }
+
+  function inferAllergyType(allergen, hint) {
+    if (hint) return hint;
+    const a = String(allergen || "");
+    if (/\blatex\b/i.test(a)) return "latex";
+    if (FOOD_ALLERGEN_RE.test(a)) return "food";
+    if (DRUG_ALLERGEN_RE.test(a)) return "drug";
+    if (ENV_ALLERGEN_RE.test(a)) return "environmental";
+    return "other";
+  }
+
+  function isNkdaText(text) {
+    const t = cleanLine(String(text || "")).replace(/[.\s]+$/g, "").replace(/\s+/g, " ");
+    if (!t) return false;
+    if (NKDA_RE.test(t)) return true;
+    if (/^(nka|nkda|nkfa)\b/i.test(t) && !/\bexcept\b|\bbut\b/i.test(t)) return true;
+    return /no\s+known\s+(?:drug\s+|food\s+)?allerg(?:y|ies)/i.test(t) && !/\bexcept\b/i.test(t);
+  }
+
+  function matchAllergyHeader(line) {
+    const t = String(line || "").trim();
+    if (!t) return null;
+    const m = t.match(ALLERGY_HEADER_RE);
+    if (!m) return null;
+    // Avoid treating "allergy to X" mid-sentence as a new section when it lacks a label colon
+    // unless it starts with a known label word.
+    const label = m[1] || "";
+    const remainder = (m[2] || "").trim();
+    return { label, remainder, typeHint: allergyTypeFromHeader(label + " " + t) };
+  }
+
+  function isAllergyTableHeader(line) {
+    const t = String(line || "").replace(/[|+\-_/]/g, " ").replace(/\s+/g, " ").trim();
+    return ALLERGY_TABLE_RE.test(t) && t.split(" ").length <= 12;
+  }
+
+  function splitAllergyItems(text) {
+    const t = stripListMarker(String(text || "")).trim();
+    if (!t) return [];
+    const semi = t.split(/\s*;\s*/).map((s) => s.trim()).filter(Boolean);
+    if (semi.length > 1) return semi;
+    const parts = [];
+    let buf = "";
+    let depth = 0;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      if (ch === "," && depth === 0) {
+        if (buf.trim()) parts.push(buf.trim());
+        buf = "";
+        continue;
+      }
+      buf += ch;
+    }
+    if (buf.trim()) parts.push(buf.trim());
+    return parts.length ? parts : [t];
+  }
+
+  function normalizeSeverity(word) {
+    const w = String(word || "").toLowerCase().replace(/_/g, " ");
+    if (/anaphyl/.test(w) || /life/.test(w)) return "life-threatening";
+    if (/severe/.test(w)) return "severe";
+    if (/moderate/.test(w)) return "moderate";
+    if (/mild/.test(w)) return "mild";
+    return w;
+  }
+
+  function parseAllergyItem(raw, typeHint) {
+    let t = stripListMarker(String(raw || "")).trim();
+    t = t.replace(/^[•\-–—*]\s+/, "").replace(/\s+/g, " ").trim();
+    if (!t || SKIP_UNCODED_RE.test(t) || isNkdaText(t)) return null;
+    if (isAllergyTableHeader(t) || matchAllergyHeader(t) && !/^(latex)$/i.test(t)) return null;
+
+    let allergen = t;
+    let reaction = "";
+    let severity = "";
+
+    const trailingSev = t.match(/^(.{1,120}?)\s*\(([^)]+)\)\s*$/);
+    if (trailingSev && SEVERITY_WORD_RE.test(trailingSev[2]) && !/,/.test(trailingSev[2])) {
+      severity = normalizeSeverity(trailingSev[2]);
+      t = trailingSev[1].trim();
+      allergen = t;
+    }
+
+    const paren = t.match(/^(.{1,80}?)\s*\(([^)]+)\)\s*$/);
+    if (paren) {
+      allergen = paren[1].trim();
+      const inner = paren[2].trim();
+      const sev = inner.match(SEVERITY_WORD_RE);
+      if (sev && inner.toLowerCase() !== sev[0].toLowerCase()) {
+        severity = normalizeSeverity(sev[0]);
+        reaction = inner.replace(SEVERITY_WORD_RE, " ").replace(/[,\s/;]+$/g, "").replace(/^[,\s/;]+/, "").trim();
+      } else if (sev && /anaphyl/.test(sev[0])) {
+        reaction = "anaphylaxis";
+        severity = "life-threatening";
+      } else if (sev) {
+        severity = normalizeSeverity(sev[0]);
+      } else {
+        reaction = inner;
+      }
+    } else {
+      const dashed = t.match(/^(.{1,80}?)\s*(?:[-:–]|\/)\s+(.{1,200})$/);
+      if (dashed && !/^\d/.test(dashed[2]) && dashed[1].length <= 60) {
+        allergen = dashed[1].trim();
+        let rest = dashed[2].trim();
+        const sevParen = rest.match(/\(([^)]+)\)\s*$/);
+        if (sevParen && SEVERITY_WORD_RE.test(sevParen[1])) {
+          severity = normalizeSeverity(sevParen[1]);
+          rest = rest.replace(/\s*\([^)]+\)\s*$/, "").trim();
+        }
+        const sevWord = rest.match(SEVERITY_WORD_RE);
+        if (sevWord && rest.toLowerCase() === sevWord[0].toLowerCase()) {
+          severity = normalizeSeverity(sevWord[0]);
+          if (/anaphyl/.test(sevWord[0])) reaction = "anaphylaxis";
+        } else if (sevWord) {
+          severity = normalizeSeverity(sevWord[0]);
+          reaction = rest.replace(SEVERITY_WORD_RE, " ").replace(/[,\s/;]+$/g, "").trim();
+        } else {
+          reaction = rest;
+        }
+      }
+    }
+
+    allergen = allergen.replace(/[,;:\s]+$/g, "").trim();
+    if (!allergen || allergen.length < 2) return null;
+    if (/^(allergen|allergy|allergies|reaction|severity|type|substance|drug|food)$/i.test(allergen)) return null;
+
+    if (/anaphyl/.test(reaction) && !severity) severity = "life-threatening";
+
+    const type = inferAllergyType(allergen, typeHint);
+    return {
+      allergen,
+      reaction: reaction || "",
+      severity: severity || "",
+      type: type || "other",
+    };
+  }
+
+  function parseAllergyTableRow(line, typeHint) {
+    const t = String(line || "").trim();
+    if (!t) return null;
+    const cols = t.split(/\s*\|\s*|\t+| {2,}/).map((c) => c.trim()).filter(Boolean);
+    if (cols.length >= 2 && !isAllergyTableHeader(t)) {
+      const item = {
+        allergen: cols[0],
+        reaction: "",
+        severity: "",
+        type: inferAllergyType(cols[0], typeHint),
+      };
+      if (cols.length >= 3) {
+        item.reaction = cols[1];
+        if (SEVERITY_WORD_RE.test(cols[2])) item.severity = normalizeSeverity(cols[2]);
+        else item.reaction = cols.slice(1).join(" ");
+      } else if (SEVERITY_WORD_RE.test(cols[1]) && !/anaphyl/i.test(cols[1])) {
+        item.severity = normalizeSeverity(cols[1]);
+      } else if (SEVERITY_WORD_RE.test(cols[1]) && /anaphyl/i.test(cols[1])) {
+        item.reaction = "anaphylaxis";
+        item.severity = "life-threatening";
+      } else {
+        item.reaction = cols[1];
+      }
+      if (item.allergen && !/^(allergen|allergy|substance|drug|agent)$/i.test(item.allergen)) return item;
+    }
+    return parseAllergyItem(t, typeHint);
+  }
+
+  function blankAllergies() {
+    return { status: "unknown", items: [] };
+  }
+
+  function formatAllergyItem(item) {
+    if (!item || !item.allergen) return "";
+    const extra = [item.reaction, item.severity].filter(Boolean).join(", ");
+    return extra ? `${item.allergen} (${extra})` : item.allergen;
+  }
+
+  function formatAllergies(allergies) {
+    if (!allergies || allergies.status === "unknown") return "";
+    if (allergies.status === "nkda") return "NKDA";
+    return (allergies.items || []).map(formatAllergyItem).filter(Boolean).join("; ");
+  }
+
+  function extractAllergies(text) {
+    const empty = blankAllergies();
+    if (!text) return empty;
+    const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+    const items = [];
+    let inSection = false;
+    let typeHint = "";
+    let sawNkda = false;
+    let inTable = false;
+
+    const addFromText = (raw, hint) => {
+      if (!raw) return;
+      if (isNkdaText(raw)) {
+        sawNkda = true;
+        return;
+      }
+      for (const part of splitAllergyItems(raw)) {
+        if (isNkdaText(part)) {
+          sawNkda = true;
+          continue;
+        }
+        const item = inTable ? parseAllergyTableRow(part, hint) : parseAllergyItem(part, hint);
+        if (item && item.allergen) items.push(item);
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (!trimmed) continue;
+
+      if (isAllergyTableHeader(trimmed)) {
+        inSection = true;
+        inTable = true;
+        continue;
+      }
+
+      const header = matchAllergyHeader(trimmed);
+      if (header) {
+        inSection = true;
+        inTable = false;
+        typeHint = header.typeHint || typeHint;
+        if (header.remainder) {
+          if (/^(latex)(?:\s+allerg(?:y|ies))?$/i.test(header.label) && !isNkdaText(header.remainder) && splitAllergyItems(header.remainder).length <= 1) {
+            const sev = header.remainder.match(SEVERITY_WORD_RE);
+            items.push({
+              allergen: "Latex",
+              reaction: sev && header.remainder.toLowerCase() === sev[0].toLowerCase() && /anaphyl/.test(sev[0]) ? "anaphylaxis" : header.remainder,
+              severity: sev && /anaphyl/.test(sev[0]) ? "life-threatening" : (sev && header.remainder.toLowerCase() === sev[0].toLowerCase() ? normalizeSeverity(sev[0]) : ""),
+              type: "latex",
+            });
+          } else {
+            addFromText(header.remainder, typeHint);
+          }
+        }
+        continue;
+      }
+
+      if (inSection && isEndSection(trimmed)) {
+        inSection = false;
+        inTable = false;
+        typeHint = "";
+        continue;
+      }
+
+      if (inSection) {
+        if (isNkdaText(trimmed)) {
+          sawNkda = true;
+          continue;
+        }
+        addFromText(trimmed, typeHint);
+      }
+    }
+
+    const unique = [];
+    const seen = new Set();
+    for (const item of items) {
+      const key = item.allergen.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(item);
+    }
+
+    if (unique.length) return { status: "listed", items: unique };
+    if (sawNkda) return { status: "nkda", items: [] };
+    return empty;
+  }
+
   function formatDiagnosis(item) {
     if (!item) return "";
     const code = item.code || "";
@@ -435,12 +728,14 @@
     const payerGuess = guessPayer(text);
     const needs = NEED_KEYWORDS.filter((n) => n.re.test(text)).map((n) => n.id);
     const notes = pick(text, [/Notes?\s*[:\-]\s*([^\n]{10,400})/i]);
+    const allergies = extractAllergies(text);
     return {
       name,
       dob: normalizeDob(dobRaw),
       hospital,
       diagnosis,
       diagnoses,
+      allergies,
       dateReceived,
       expectedAdmitDate: expected,
       payer: payerGuess.payer,
@@ -459,6 +754,11 @@
     isIcd10Shape,
     formatDiagnosis,
     formatDiagnosesList,
+    extractAllergies,
+    formatAllergies,
+    formatAllergyItem,
+    blankAllergies,
+    isNkdaText,
     pick,
     cleanLine,
     normalizeDob,

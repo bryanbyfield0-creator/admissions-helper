@@ -1,0 +1,20 @@
+POST-ACUTE REFERRAL
+
+Patient Name: Rosa M. Delgado
+Date of Birth: 04/18/1944
+Referring Hospital: St. Mary Medical Center
+Insurance: Medicare Part A
+Referral Date: 11/16/2026
+
+Primary Diagnosis: Type 2 diabetes mellitus
+Secondary Diagnoses:
+Hypertension
+CHF
+COPD
+CKD stage 3
+Dementia
+
+Allergies: PCN (rash), sulfa
+
+Care Needs: PT, OT, oxygen
+Notes: Family requests a first-floor room.

@@ -428,6 +428,113 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 }
 .dx-row .dx-code { font-variant-ligatures: none; letter-spacing: 0.02em; text-transform: uppercase; }
 .dx-missing { color: var(--muted); font-size: 0.72rem; font-weight: 600; font-style: italic; }
+.dx-code-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dx-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  width: fit-content;
+  border: 1px solid transparent;
+  letter-spacing: 0.01em;
+}
+.dx-badge-suggested { background: var(--amber-soft); color: var(--amber); border-color: #f0d59a; }
+.dx-badge-found { background: var(--teal-soft); color: var(--teal-dark); border-color: #cfe6e3; }
+.dx-badge-invalid, .dx-badge-nonbillable { background: var(--danger-soft); color: var(--danger); border-color: #f0c4c0; }
+.dx-row[data-code-source="suggested"] .dx-code { border-color: #e6c36d; background: #fffdf6; }
+.dx-row[data-code-status="invalid"] .dx-code,
+.dx-row[data-code-status="nonbillable"] .dx-code { border-color: #e3a39e; background: #fff8f7; }
+.dx-alts {
+  grid-column: 2 / -1;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #fff;
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+.dx-alts:disabled { display: none; }
+
+.allergies { border: 2px solid #e3a39e; border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; background: #fff8f7; }
+.allergies legend { padding: 0 6px; font-weight: 800; font-size: 0.9rem; color: var(--danger); }
+.allergies legend.from-pdf::after {
+  content: " from file — review";
+  font-weight: 600;
+  color: var(--amber);
+  font-size: 0.72rem;
+}
+.allergy-safety-pill {
+  display: inline-flex;
+  margin-left: 6px;
+  background: var(--danger);
+  color: #fff;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.allergies .hint { margin: 0 0 8px; font-weight: 400; color: #7a2e28; }
+.allergy-nkda {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+.allergy-nkda input { width: 16px; height: 16px; accent-color: var(--teal); }
+.allergy-banner {
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.allergy-banner-listed { background: var(--danger-soft); color: var(--danger); border: 1px solid #f0c4c0; }
+.allergy-banner-nkda { background: var(--ok-soft); color: var(--ok); border: 1px solid #b7e0c5; }
+.allergy-banner-unknown { background: var(--paper); color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+.allergy-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.allergy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 7.5rem 8.5rem auto;
+  gap: 8px;
+  align-items: center;
+}
+.allergy-row input, .allergy-row select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+}
+.allergy-detail { margin: 0 0 12px; }
+.allergy-detail-listed {
+  background: var(--danger-soft);
+  border: 1px solid #f0c4c0;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.allergy-detail-listed strong { color: var(--danger); }
+.allergy-detail-nkda {
+  background: var(--ok-soft);
+  border: 1px solid #b7e0c5;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--ok);
+}
+.allergy-detail-unknown { color: var(--muted); }
+.allergy-detail ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.allergy-detail li { padding: 4px 0; border-bottom: 1px solid #f0c4c0; font-size: 0.92rem; font-weight: 600; }
+
 .dx-detail { margin: 0 0 10px; }
 .dx-detail ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .dx-detail li {
@@ -616,6 +723,9 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
   .dx-row .dx-desc { grid-column: 1 / -1; }
   .dx-row .dx-primary { grid-column: 1; }
   .dx-row [data-remove-dx] { grid-column: 2; justify-self: end; }
+  .dx-alts { grid-column: 1 / -1; }
+  .allergy-row { grid-template-columns: 1fr 1fr; }
+  .allergy-row [data-remove-allergy] { grid-column: 1 / -1; justify-self: end; }
   .nav { top: auto; }
   main { padding: 12px; }
   .board { grid-template-columns: repeat(6, minmax(220px, 80vw)); }

@@ -139,6 +139,7 @@
       hospital: "",
       diagnosis: "",
       diagnoses: [],
+      allergies: { status: "unknown", items: [] },
       payer: "",
       payerNotes: "",
       dateReceived: todayISO(),
@@ -307,7 +308,8 @@
       if (filterPayer && r.payer !== filterPayer) return false;
       if (!q) return true;
       const dxText = (r.diagnoses || []).map((d) => [d.code, d.description].filter(Boolean).join(" ")).join(" ");
-      const hay = [r.name, r.hospital, r.diagnosis, dxText, payerLabel(r.payer), r.payerNotes, r.notes, (r.needs || []).map(needLabel).join(" ")].join(" ").toLowerCase();
+      const alrg = r.allergies && r.allergies.status === "nkda" ? "nkda no known allergies" : ((r.allergies && r.allergies.items) || []).map((a) => [a.allergen, a.reaction].filter(Boolean).join(" ")).join(" ");
+      const hay = [r.name, r.hospital, r.diagnosis, dxText, alrg, payerLabel(r.payer), r.payerNotes, r.notes, (r.needs || []).map(needLabel).join(" ")].join(" ").toLowerCase();
       return hay.includes(q);
     }).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
   }
@@ -482,6 +484,10 @@
         code: (d && d.code) || "",
         description: (d && d.description) || "",
         primary: !!(d && d.primary),
+        codeSource: (d && d.codeSource) || "",
+        codeStatus: (d && d.codeStatus) || "",
+        officialDescription: (d && d.officialDescription) || "",
+        suggestions: Array.isArray(d && d.suggestions) ? d.suggestions : [],
       }));
     }
     if (r.diagnosis) return [{ code: "", description: r.diagnosis, primary: true }];
@@ -498,6 +504,33 @@
     return (items || []).map(formatDiagnosisText).filter(Boolean).join("; ");
   }
 
+  function formatDiagnosesWithSource(items) {
+    return (items || []).map((d) => {
+      const text = formatDiagnosisText(d);
+      if (!text) return "";
+      const bits = [];
+      if (d.codeSource === "suggested") bits.push("suggested");
+      else if (d.codeSource === "found") bits.push("found");
+      else if (d.codeSource === "manual") bits.push("entered");
+      if (d.codeStatus === "invalid") bits.push("invalid");
+      else if (d.codeStatus === "nonbillable") bits.push("not billable");
+      return bits.length ? `${text} (${bits.join(", ")})` : text;
+    }).filter(Boolean).join("; ");
+  }
+
+  function codeBadgeHtml(d, testId) {
+    if (!d || !d.code) return "";
+    let cls = "";
+    let label = "";
+    if (d.codeStatus === "invalid") { cls = "dx-badge-invalid"; label = "not in ICD-10-CM – verify"; }
+    else if (d.codeStatus === "nonbillable") { cls = "dx-badge-nonbillable"; label = "not billable – verify"; }
+    else if (d.codeSource === "suggested") { cls = "dx-badge-suggested"; label = "suggested – verify"; }
+    else if (d.codeSource === "found") { cls = "dx-badge-found"; label = "from referral"; }
+    if (!label) return "";
+    const idAttr = testId ? ` data-testid="${testId}"` : "";
+    return `<span class="dx-badge ${cls}"${idAttr}>${escapeHtml(label)}</span>`;
+  }
+
   function diagnosesListHtml(items) {
     if (!items || !items.length) return "";
     const rows = items.map((d) => {
@@ -506,9 +539,59 @@
         : `<span class="dx-missing">no code found</span>`;
       const desc = escapeHtml(d.description || (d.code ? "" : "—"));
       const pri = d.primary ? ` <span class="pill">Primary</span>` : "";
-      return `<li>${code}<span>${desc}</span>${pri}</li>`;
+      return `<li>${code}<span>${desc}</span>${pri}${codeBadgeHtml(d)}</li>`;
     }).join("");
     return `<div class="dx-detail" data-testid="diagnoses-detail"><strong>Diagnoses</strong><ul>${rows}</ul></div>`;
+  }
+
+  function referralAllergies(r) {
+    if (r && r.allergies && (r.allergies.status || (r.allergies.items && r.allergies.items.length))) {
+      return {
+        status: r.allergies.status || (r.allergies.items && r.allergies.items.length ? "listed" : "unknown"),
+        items: Array.isArray(r.allergies.items) ? r.allergies.items.map((a) => ({
+          allergen: (a && a.allergen) || "",
+          reaction: (a && a.reaction) || "",
+          severity: (a && a.severity) || "",
+          type: (a && a.type) || "",
+        })).filter((a) => a.allergen) : [],
+      };
+    }
+    return { status: "unknown", items: [] };
+  }
+
+  function formatAllergiesText(allergies) {
+    if (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.formatAllergies) {
+      return AdmissionsExtract.formatAllergies(allergies);
+    }
+    if (!allergies || allergies.status === "unknown") return "";
+    if (allergies.status === "nkda") return "NKDA";
+    return ((allergies.items) || []).map((a) => {
+      const extra = [a.reaction, a.severity].filter(Boolean).join(", ");
+      return extra ? `${a.allergen} (${extra})` : a.allergen;
+    }).filter(Boolean).join("; ");
+  }
+
+  function allergiesSummaryLine(r, { missing = "not listed" } = {}) {
+    const a = referralAllergies(r);
+    if (a.status === "nkda") return "NKDA";
+    const text = formatAllergiesText(a);
+    return text || missing;
+  }
+
+  function allergiesDetailHtml(r) {
+    const a = referralAllergies(r);
+    if (a.status === "nkda") {
+      return `<div class="allergy-detail allergy-detail-nkda" data-testid="allergies-detail"><strong>Allergies:</strong> No known allergies (NKDA)</div>`;
+    }
+    if (a.status === "listed" && a.items.length) {
+      const rows = a.items.map((item) => {
+        const bits = [item.allergen];
+        const extra = [item.reaction, item.severity, item.type].filter(Boolean).join(" · ");
+        return `<li>${escapeHtml(item.allergen)}${extra ? ` — ${escapeHtml(extra)}` : ""}</li>`;
+      }).join("");
+      return `<div class="allergy-detail allergy-detail-listed" data-testid="allergies-detail"><strong>Allergies — review before admission</strong><ul>${rows}</ul></div>`;
+    }
+    return `<div class="allergy-detail allergy-detail-unknown" data-testid="allergies-detail"><strong>Allergies:</strong> not listed in the referral — please confirm</div>`;
   }
 
   function renderDetail() {
@@ -540,6 +623,7 @@
           <p><strong>Name / initials:</strong> ${escapeHtml(r.name)}</p>
           <p><strong>Date of birth:</strong> ${escapeHtml(formatDate(r.dob))}</p>
           <p><strong>Hospital / source:</strong> ${escapeHtml(r.hospital || "—")}</p>
+          ${allergiesDetailHtml(r)}
           <p><strong>Diagnosis:</strong> ${escapeHtml(r.diagnosis || "—")}</p>
           ${diagnosesListHtml(referralDiagnoses(r))}
           <p><strong>Payer:</strong> ${escapeHtml(payerLabel(r.payer))}${r.payerNotes ? ` — ${escapeHtml(r.payerNotes)}` : ""}</p>
@@ -603,9 +687,11 @@
 
   function buildAcceptMessage(r) {
     const when = r.expectedAdmitDate ? ` on ${formatDate(r.expectedAdmitDate)}` : " (date to be confirmed)";
-    const dx = formatDiagnosesPlain(referralDiagnoses(r));
-    const dxBlock = dx ? `\n\nDiagnoses: ${dx}\n` : " ";
-    return `Hello,\n\nWe are pleased to accept the referral for ${r.name || "this patient"} from ${r.hospital || "your hospital"}. We can admit${when}.${dxBlock}Please send any remaining records (H&P, medication list, and discharge summary) and confirm transportation.\n\nThank you,\n${facilityName()}`;
+    const dx = formatDiagnosesWithSource(referralDiagnoses(r)) || formatDiagnosesPlain(referralDiagnoses(r));
+    const dxBlock = dx ? `\n\nDiagnoses: ${dx}` : "";
+    const alrg = allergiesSummaryLine(r, { missing: "not listed in the referral — please confirm" });
+    const alrgBlock = `\nAllergies: ${alrg}\n`;
+    return `Hello,\n\nWe are pleased to accept the referral for ${r.name || "this patient"} from ${r.hospital || "your hospital"}. We can admit${when}.${dxBlock}${alrgBlock}Please send any remaining records (H&P, medication list, and discharge summary) and confirm transportation.\n\nThank you,\n${facilityName()}`;
   }
 
   function buildDeclineMessage(r) {
@@ -621,8 +707,9 @@
     const awaiting = state.referrals.filter((r) => ["new", "reviewing", "pending-auth"].includes(r.status));
     const accepted = state.referrals.filter((r) => r.status === "accepted");
     const line = (r) => {
-      const dx = formatDiagnosesPlain(referralDiagnoses(r)) || r.diagnosis || "dx n/a";
-      return `- ${r.name || "Untitled"} | ${r.hospital || "source n/a"} | ${payerLabel(r.payer)} | ${dx}${r.expectedAdmitDate ? ` | expected ${formatDate(r.expectedAdmitDate)}` : ""}`;
+      const dx = formatDiagnosesWithSource(referralDiagnoses(r)) || r.diagnosis || "dx n/a";
+      const alrg = allergiesSummaryLine(r, { missing: "allergies n/a" });
+      return `- ${r.name || "Untitled"} | ${r.hospital || "source n/a"} | ${payerLabel(r.payer)} | ${dx} | Allergies: ${alrg}${r.expectedAdmitDate ? ` | expected ${formatDate(r.expectedAdmitDate)}` : ""}`;
     };
     return `Daily admissions summary — ${formatDate(today)}\n${facilityName()}\n\nExpected admits today (${expected.length}):\n${expected.length ? expected.map(line).join("\n") : "- None"}\n\nAccepted, awaiting arrival (${accepted.length}):\n${accepted.length ? accepted.map(line).join("\n") : "- None"}\n\nStill in review or pending insurance auth (${awaiting.length}):\n${awaiting.length ? awaiting.map(line).join("\n") : "- None"}\n\nPipeline counts: New ${c.new}, Reviewing ${c.reviewing}, Pending auth ${c["pending-auth"]}, Accepted ${c.accepted}, Admitted ${c.admitted}, Declined ${c.declined}\n`;
   }
@@ -660,18 +747,36 @@
   }
 
   function diagnosisRowEl(item) {
-    const d = item || { code: "", description: "", primary: false };
+    const d = item || { code: "", description: "", primary: false, codeSource: "", codeStatus: "", suggestions: [] };
     const row = document.createElement("div");
     row.className = "dx-row";
     row.setAttribute("data-testid", "diagnosis-row");
+    row.dataset.codeSource = d.codeSource || "";
+    row.dataset.codeStatus = d.codeStatus || "";
+    const suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
+    row.dataset.suggestions = JSON.stringify(suggestions);
+    const badge = codeBadgeHtml(d, "diagnosis-code-badge");
+    const altOptions = suggestions.map((s) => {
+      const tag = s.billable === false ? " (not billable)" : "";
+      const selected = s.code === d.code ? " selected" : "";
+      return `<option value="${escapeHtml(s.code)}"${selected}>${escapeHtml(s.code)} — ${escapeHtml(s.description || "")}${tag}</option>`;
+    }).join("");
+    const hasAlts = suggestions.length > 0;
     row.innerHTML = `
       <label class="dx-primary">
         <input type="radio" name="dx-primary" class="dx-primary-input" data-testid="diagnosis-primary" ${d.primary ? "checked" : ""} />
         Primary
       </label>
-      <input type="text" class="dx-code" data-testid="diagnosis-code" maxlength="16" placeholder="ICD-10" value="${escapeHtml(d.code || "")}" autocomplete="off" spellcheck="false" />
-      <input type="text" class="dx-desc" data-testid="diagnosis-description" maxlength="400" placeholder="${d.code ? "Description" : "Description or no code found"}" value="${escapeHtml(d.description || "")}" />
+      <div class="dx-code-wrap">
+        <input type="text" class="dx-code" data-testid="diagnosis-code" maxlength="16" placeholder="ICD-10" value="${escapeHtml(d.code || "")}" autocomplete="off" spellcheck="false" />
+        ${badge}
+      </div>
+      <input type="text" class="dx-desc" data-testid="diagnosis-description" maxlength="400" placeholder="Description" value="${escapeHtml(d.description || "")}" />
       <button type="button" class="btn small" data-remove-dx="1" data-testid="remove-diagnosis">Remove</button>
+      <select class="dx-alts" data-testid="diagnosis-code-alternatives" ${hasAlts ? "" : "disabled hidden"}>
+        <option value="">Search or pick another code…</option>
+        ${altOptions}
+      </select>
     `;
     return row;
   }
@@ -690,12 +795,82 @@
       const normalized = (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.normalizeIcd10Code)
         ? AdmissionsExtract.normalizeIcd10Code(raw)
         : raw.toUpperCase();
+      let suggestions = [];
+      try { suggestions = JSON.parse(row.dataset.suggestions || "[]"); } catch { suggestions = []; }
       return {
         code: normalized || raw.toUpperCase(),
         description: (row.querySelector(".dx-desc")?.value || "").trim(),
         primary: !!row.querySelector(".dx-primary-input")?.checked,
+        codeSource: row.dataset.codeSource || "",
+        codeStatus: row.dataset.codeStatus || "",
+        suggestions,
       };
     }).filter((d) => d.code || d.description);
+  }
+
+  function updateRowCodeMeta(row, { source, status, suggestions, officialDescription } = {}) {
+    if (source != null) row.dataset.codeSource = source;
+    if (status != null) row.dataset.codeStatus = status;
+    if (suggestions) row.dataset.suggestions = JSON.stringify(suggestions);
+    const input = row.querySelector(".dx-code");
+    const wrap = row.querySelector(".dx-code-wrap");
+    if (wrap && input) {
+      const item = {
+        code: input.value.trim(),
+        codeSource: row.dataset.codeSource,
+        codeStatus: row.dataset.codeStatus,
+      };
+      wrap.querySelectorAll(".dx-badge").forEach((el) => el.remove());
+      const html = codeBadgeHtml(item, "diagnosis-code-badge");
+      if (html) {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        wrap.appendChild(tmp.firstElementChild);
+      }
+    }
+    const sel = row.querySelector(".dx-alts");
+    if (sel && suggestions) {
+      const current = (row.querySelector(".dx-code")?.value || "").trim();
+      sel.innerHTML = `<option value="">Search or pick another code…</option>` + suggestions.map((s) => {
+        const tag = s.billable === false ? " (not billable)" : "";
+        const selected = s.code === current ? " selected" : "";
+        return `<option value="${escapeHtml(s.code)}"${selected}>${escapeHtml(s.code)} — ${escapeHtml(s.description || "")}${tag}</option>`;
+      }).join("");
+      sel.disabled = !suggestions.length;
+      sel.hidden = !suggestions.length;
+    }
+    if (officialDescription) row.dataset.officialDescription = officialDescription;
+  }
+
+  async function enhanceDiagnosesWithCodes() {
+    if (typeof AdmissionsICD === "undefined") return;
+    try {
+      await AdmissionsICD.ensureLoaded();
+    } catch (err) {
+      console.warn(err);
+      return;
+    }
+    const current = readDiagnosesList();
+    if (!current.length) return;
+    const next = AdmissionsICD.applyToDiagnoses(current);
+    const primaryValue = $("#referral-diagnosis")?.value;
+    renderDiagnosisRows(next);
+    if (primaryValue && $("#referral-diagnosis")) $("#referral-diagnosis").value = primaryValue;
+  }
+
+  async function searchCodesForRow(row, query) {
+    if (typeof AdmissionsICD === "undefined") return;
+    try {
+      await AdmissionsICD.ensureLoaded();
+    } catch {
+      return;
+    }
+    const hits = AdmissionsICD.search(query, { limit: 8 });
+    updateRowCodeMeta(row, { suggestions: hits });
+    const exact = AdmissionsICD.validate(query);
+    if (query && exact && exact.status !== "invalid" && exact.code) {
+      updateRowCodeMeta(row, { source: "manual", status: exact.status, officialDescription: exact.description });
+    }
   }
 
   function syncPrimaryDiagnosisField() {
@@ -734,6 +909,7 @@
         if (code) code.value = "";
         if (desc) desc.value = "";
         if (pri) pri.checked = true;
+        updateRowCodeMeta(row, { source: "", status: "", suggestions: [] });
       } else {
         const wasPrimary = !!row.querySelector(".dx-primary-input")?.checked;
         row.remove();
@@ -746,12 +922,168 @@
     });
     list.addEventListener("change", (e) => {
       if (e.target.classList.contains("dx-primary-input")) syncPrimaryDiagnosisField();
+      if (e.target.classList.contains("dx-alts")) {
+        const row = e.target.closest(".dx-row");
+        const code = e.target.value;
+        if (!row || !code) return;
+        const input = row.querySelector(".dx-code");
+        if (input) input.value = code;
+        let status = "valid";
+        if (typeof AdmissionsICD !== "undefined" && AdmissionsICD.isReady()) {
+          status = AdmissionsICD.validate(code).status;
+        }
+        updateRowCodeMeta(row, { source: "manual", status });
+        if (row.querySelector(".dx-primary-input")?.checked) syncPrimaryDiagnosisField();
+      }
     });
+    let searchTimer = 0;
     list.addEventListener("input", (e) => {
       if (e.target.classList.contains("dx-code") || e.target.classList.contains("dx-desc")) {
         const row = e.target.closest(".dx-row");
         if (row?.querySelector(".dx-primary-input")?.checked) syncPrimaryDiagnosisField();
+        if (e.target.classList.contains("dx-code")) {
+          row.dataset.codeSource = "manual";
+          clearTimeout(searchTimer);
+          const q = e.target.value.trim();
+          searchTimer = setTimeout(() => searchCodesForRow(row, q), 200);
+        }
+        if (e.target.classList.contains("dx-desc") && !(row.querySelector(".dx-code")?.value || "").trim()) {
+          clearTimeout(searchTimer);
+          const q = e.target.value.trim();
+          searchTimer = setTimeout(async () => {
+            if (typeof AdmissionsICD === "undefined" || q.length < 3) return;
+            try { await AdmissionsICD.ensureLoaded(); } catch { return; }
+            const hits = AdmissionsICD.suggest(q, { limit: 5 });
+            updateRowCodeMeta(row, { suggestions: hits });
+          }, 250);
+        }
       }
+    });
+  }
+
+  const ALLERGY_TYPES = [
+    { id: "", label: "Type" },
+    { id: "drug", label: "Drug" },
+    { id: "food", label: "Food" },
+    { id: "environmental", label: "Environmental" },
+    { id: "latex", label: "Latex" },
+    { id: "other", label: "Other" },
+  ];
+  const ALLERGY_SEVERITIES = ["", "mild", "moderate", "severe", "life-threatening"];
+
+  function allergyRowEl(item) {
+    const a = item || { allergen: "", reaction: "", severity: "", type: "" };
+    const row = document.createElement("div");
+    row.className = "allergy-row";
+    row.setAttribute("data-testid", "allergy-row");
+    const sevOpts = ALLERGY_SEVERITIES.map((s) => `<option value="${escapeHtml(s)}"${a.severity === s ? " selected" : ""}>${s ? escapeHtml(s) : "Severity"}</option>`).join("");
+    const typeOpts = ALLERGY_TYPES.map((s) => `<option value="${escapeHtml(s.id)}"${a.type === s.id ? " selected" : ""}>${escapeHtml(s.label)}</option>`).join("");
+    row.innerHTML = `
+      <input type="text" class="allergy-allergen" data-testid="allergy-allergen" maxlength="160" placeholder="Allergen" value="${escapeHtml(a.allergen || "")}" />
+      <input type="text" class="allergy-reaction" data-testid="allergy-reaction" maxlength="160" placeholder="Reaction" value="${escapeHtml(a.reaction || "")}" />
+      <select class="allergy-severity" data-testid="allergy-severity">${sevOpts}</select>
+      <select class="allergy-type" data-testid="allergy-type">${typeOpts}</select>
+      <button type="button" class="btn small" data-remove-allergy="1" data-testid="remove-allergy">Remove</button>
+    `;
+    return row;
+  }
+
+  function updateAllergiesBanner(status) {
+    const banner = $("#allergies-banner");
+    if (!banner) return;
+    banner.className = "allergy-banner";
+    if (status === "nkda") {
+      banner.hidden = false;
+      banner.classList.add("allergy-banner-nkda");
+      banner.textContent = "No known allergies (NKDA). This was recorded explicitly — it is not the same as a missing allergy section.";
+    } else if (status === "listed") {
+      banner.hidden = false;
+      banner.classList.add("allergy-banner-listed");
+      banner.textContent = "Allergies are listed. This is safety-critical — review every item before you save or admit.";
+    } else {
+      banner.hidden = false;
+      banner.classList.add("allergy-banner-unknown");
+      banner.textContent = "No allergy section was found in the referral. Confirm allergies before admission.";
+    }
+  }
+
+  function renderAllergyEditor(allergies) {
+    const box = $("#allergies-list");
+    const nkda = $("#allergies-nkda");
+    if (!box) return;
+    const data = allergies || { status: "unknown", items: [] };
+    box.innerHTML = "";
+    if (nkda) nkda.checked = data.status === "nkda";
+    if (data.status === "listed" && data.items && data.items.length) {
+      data.items.forEach((item) => box.appendChild(allergyRowEl(item)));
+    } else if (data.status !== "nkda") {
+      box.appendChild(allergyRowEl({}));
+    }
+    box.hidden = data.status === "nkda";
+    const addBtn = $("#add-allergy-btn");
+    if (addBtn) addBtn.hidden = data.status === "nkda";
+    updateAllergiesBanner(data.status || "unknown");
+  }
+
+  function readAllergies() {
+    const nkda = $("#allergies-nkda");
+    if (nkda && nkda.checked) return { status: "nkda", items: [] };
+    const items = $$("#allergies-list [data-testid='allergy-row']").map((row) => ({
+      allergen: (row.querySelector(".allergy-allergen")?.value || "").trim(),
+      reaction: (row.querySelector(".allergy-reaction")?.value || "").trim(),
+      severity: (row.querySelector(".allergy-severity")?.value || "").trim(),
+      type: (row.querySelector(".allergy-type")?.value || "").trim(),
+    })).filter((a) => a.allergen);
+    if (items.length) return { status: "listed", items };
+    const banner = $("#allergies-banner");
+    const status = banner && banner.classList.contains("allergy-banner-unknown") ? "unknown" : (items.length ? "listed" : "unknown");
+    return { status, items };
+  }
+
+  function bindAllergiesEditor() {
+    const list = $("#allergies-list");
+    const addBtn = $("#add-allergy-btn");
+    const nkda = $("#allergies-nkda");
+    if (addBtn) addBtn.addEventListener("click", () => {
+      if (nkda) nkda.checked = false;
+      if (list) {
+        list.hidden = false;
+        addBtn.hidden = false;
+        list.appendChild(allergyRowEl({}));
+      }
+      updateAllergiesBanner("listed");
+    });
+    if (nkda) nkda.addEventListener("change", () => {
+      if (nkda.checked) {
+        if (list) list.hidden = true;
+        if (addBtn) addBtn.hidden = true;
+        updateAllergiesBanner("nkda");
+      } else {
+        if (list) {
+          list.hidden = false;
+          if (!list.querySelector("[data-testid='allergy-row']")) list.appendChild(allergyRowEl({}));
+        }
+        if (addBtn) addBtn.hidden = false;
+        const hasItems = $$("#allergies-list [data-testid='allergy-row']").some((row) => (row.querySelector(".allergy-allergen")?.value || "").trim());
+        updateAllergiesBanner(hasItems ? "listed" : "unknown");
+      }
+    });
+    if (list) list.addEventListener("click", (e) => {
+      const remove = e.target.closest("[data-remove-allergy]");
+      if (!remove) return;
+      const row = remove.closest(".allergy-row");
+      const rows = $$(".allergy-row", list);
+      if (rows.length <= 1) {
+        row.querySelectorAll("input").forEach((el) => { el.value = ""; });
+        row.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
+      } else {
+        row.remove();
+      }
+    });
+    if (list) list.addEventListener("input", () => {
+      if (nkda && nkda.checked) return;
+      const hasItems = $$("#allergies-list [data-testid='allergy-row']").some((row) => (row.querySelector(".allergy-allergen")?.value || "").trim());
+      if (hasItems) updateAllergiesBanner("listed");
     });
   }
 
@@ -766,6 +1098,7 @@
     $("#referral-hospital").value = "";
     $("#referral-diagnosis").value = "";
     renderDiagnosisRows([]);
+    renderAllergyEditor({ status: "unknown", items: [] });
     $("#referral-payer").value = "";
     $("#referral-payer-notes").value = "";
     $("#referral-date-received").value = todayISO();
@@ -793,6 +1126,7 @@
     $("#referral-hospital").value = r.hospital || "";
     $("#referral-diagnosis").value = r.diagnosis || "";
     renderDiagnosisRows(referralDiagnoses(r));
+    renderAllergyEditor(referralAllergies(r));
     $("#referral-payer").value = r.payer || "";
     $("#referral-payer-notes").value = r.payerNotes || "";
     $("#referral-date-received").value = r.dateReceived || todayISO();
@@ -821,6 +1155,8 @@
     }
     const dxLegend = $("#diagnoses-fieldset legend");
     if (dxLegend) dxLegend.classList.toggle("from-pdf", filledFromPdf.has("diagnoses"));
+    const alrgLegend = $("#allergies-fieldset legend");
+    if (alrgLegend) alrgLegend.classList.toggle("from-pdf", filledFromPdf.has("allergies"));
   }
 
   function openReferralForm(editId) {
@@ -850,6 +1186,7 @@
       hospital: $("#referral-hospital").value.trim(),
       diagnosis: $("#referral-diagnosis").value.trim(),
       diagnoses: readDiagnosesList(),
+      allergies: readAllergies(),
       payer: $("#referral-payer").value,
       payerNotes: $("#referral-payer-notes").value.trim(),
       dateReceived: $("#referral-date-received").value || todayISO(),
@@ -909,6 +1246,9 @@
     add(/Problem\s*List\s*[:\-]?[^\n]*/i);
     add(/Active\s*Diagnoses\s*[:\-]?[^\n]*/i);
     add(/Diagnosis\s*[:\-]?[^\n]+/i);
+    add(/Allerg(?:y|ies)(?:\s*\/\s*Intolerances?)?\s*[:\-]?[^\n]*/i);
+    add(/\b(NKDA|NKA|No\s+known\s+(?:drug\s+)?allerg(?:y|ies))\b/gi);
+    add(/(?:Drug|Food|Environmental|Latex)\s+Allerg(?:y|ies)\s*[:\-]?[^\n]*/i);
     if (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.ICD_CODE_RE) {
       add(AdmissionsExtract.ICD_CODE_RE);
     }
@@ -1203,6 +1543,9 @@
     apply("referral-diagnosis", "diagnosis", guessed.diagnosis);
     renderDiagnosisRows(guessed.diagnoses || []);
     if (guessed.diagnoses && guessed.diagnoses.length) filledFromPdf.add("diagnoses");
+    renderAllergyEditor(guessed.allergies || { status: "unknown", items: [] });
+    if (guessed.allergies && guessed.allergies.status && guessed.allergies.status !== "unknown") filledFromPdf.add("allergies");
+    enhanceDiagnosesWithCodes();
     apply("referral-payer", "payer", guessed.payer);
     apply("referral-payer-notes", "payerNotes", guessed.payerNotes);
     if (guessed.dateReceived) apply("referral-date-received", "dateReceived", guessed.dateReceived);
@@ -1337,16 +1680,17 @@
 
   function exportCsv() {
     const headers = [
-      "Name", "DOB", "Hospital", "Diagnosis", "Diagnoses", "Payer", "Payer notes", "Date received",
+      "Name", "DOB", "Hospital", "Diagnosis", "Diagnoses", "Allergy status", "Allergies", "Payer", "Payer notes", "Date received",
       "Expected admit", "Status", "Needs", "Notes", "Checklist complete", "Updated",
     ];
     const rows = state.referrals.map((r) => {
       const prog = checklistProgress(r);
-      const dxList = (typeof AdmissionsExtract !== "undefined" && AdmissionsExtract.formatDiagnosesList)
-        ? AdmissionsExtract.formatDiagnosesList(referralDiagnoses(r))
-        : formatDiagnosesPlain(referralDiagnoses(r));
+      const dxList = formatDiagnosesWithSource(referralDiagnoses(r)) || formatDiagnosesPlain(referralDiagnoses(r));
+      const alrg = referralAllergies(r);
+      const alrgStatus = alrg.status === "nkda" ? "NKDA" : (alrg.status === "listed" ? "listed" : "not listed");
       return [
-        r.name, r.dob, r.hospital, r.diagnosis, dxList, payerLabel(r.payer), r.payerNotes,
+        r.name, r.dob, r.hospital, r.diagnosis, dxList, alrgStatus, formatAllergiesText(alrg) || (alrg.status === "nkda" ? "NKDA" : ""),
+        payerLabel(r.payer), r.payerNotes,
         r.dateReceived, r.expectedAdmitDate, statusLabel(r.status),
         (r.needs || []).map(needLabel).join("; "), r.notes,
         `${prog.done}/${prog.items}`, r.updatedAt,
@@ -1486,6 +1830,7 @@
     $("#cancel-referral-btn").addEventListener("click", closeReferralForm);
     $("#referral-form").addEventListener("submit", saveReferral);
     bindDiagnosesEditor();
+    bindAllergiesEditor();
     $("#pdf-upload").addEventListener("change", onPdfUpload);
     $("#dash-file-input").addEventListener("change", onDashFile);
     bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"));
@@ -1554,5 +1899,8 @@
   }
 
   window.__weesheePass = "";
+  if (typeof AdmissionsICD !== "undefined" && AdmissionsICD.ensureLoaded) {
+    AdmissionsICD.ensureLoaded().catch((err) => console.warn(err));
+  }
   boot();
 })();

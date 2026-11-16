@@ -204,6 +204,7 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("referral-dob")).to_have_value("1948-03-14")
     expect(page.get_by_test_id("referral-hospital")).to_have_value("Inland Valley Medical Center")
     expect(page.get_by_test_id("referral-diagnosis")).to_have_value("Right hip fracture, s/p ORIF")
+    wait_for_suggested_codes(page, {"Hypertension": "I10", "Type 2 diabetes mellitus": "E11.9"})
     jane_dx = diagnosis_rows(page)
     assert [r["description"] for r in jane_dx] == [
         "Right hip fracture, s/p ORIF",
@@ -211,6 +212,9 @@ def add_pdf_referral(page):
         "Type 2 diabetes mellitus",
     ], jane_dx
     assert jane_dx[0]["primary"] is True
+    by_desc = {r["description"]: r for r in jane_dx}
+    assert by_desc["Hypertension"]["code"] == "I10"
+    assert by_desc["Type 2 diabetes mellitus"]["code"] == "E11.9"
     expect(page.get_by_test_id("referral-payer")).to_have_value("medicare-medicaid")
     expect(page.get_by_test_id("referral-date-received")).to_have_value("2026-11-13")
     expect(page.get_by_test_id("referral-expected-admit")).to_have_value("2026-11-14")
@@ -224,7 +228,10 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Right hip fracture, s/p ORIF")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Type 2 diabetes mellitus")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("I10")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("suggested")
+    expect(page.get_by_test_id("allergies-detail")).to_contain_text("not listed")
 
 
 def move_statuses_and_checklist(page):
@@ -334,12 +341,45 @@ def diagnosis_rows(page):
     out = []
     for i in range(rows.count()):
         row = rows.nth(i)
+        badge = row.get_by_test_id("diagnosis-code-badge")
         out.append({
             "code": row.get_by_test_id("diagnosis-code").input_value(),
             "description": row.get_by_test_id("diagnosis-description").input_value(),
             "primary": row.get_by_test_id("diagnosis-primary").is_checked(),
+            "badge": badge.inner_text() if badge.count() else "",
         })
     return out
+
+
+def wait_for_suggested_codes(page, expected, timeout=20000):
+    page.wait_for_function(
+        """(expected) => {
+          const rows = [...document.querySelectorAll('[data-testid=diagnosis-row]')];
+          const map = {};
+          for (const row of rows) {
+            const desc = (row.querySelector('[data-testid=diagnosis-description]')?.value || '').trim();
+            const code = (row.querySelector('[data-testid=diagnosis-code]')?.value || '').trim();
+            if (desc) map[desc] = code;
+          }
+          return Object.entries(expected).every(([desc, code]) => map[desc] === code);
+        }""",
+        arg=expected,
+        timeout=timeout,
+    )
+
+
+def allergy_rows(page):
+    rows = page.get_by_test_id("allergy-row")
+    out = []
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        out.append({
+            "allergen": row.get_by_test_id("allergy-allergen").input_value(),
+            "reaction": row.get_by_test_id("allergy-reaction").input_value(),
+            "severity": row.get_by_test_id("allergy-severity").input_value(),
+            "type": row.get_by_test_id("allergy-type").input_value(),
+        })
+    return [r for r in out if r["allergen"]]
 
 
 def test_multi_diagnosis_extraction(page):
@@ -406,6 +446,98 @@ def test_multi_diagnosis_extraction(page):
     assert '"diagnoses"' in raw
 
 
+
+def test_suggested_codes_and_allergies(page):
+    page.get_by_test_id("nav-dashboard").click()
+    page.get_by_test_id("dash-paste-toggle").click()
+    expect(page.get_by_test_id("dash-paste-panel")).to_be_visible()
+    text = (FIXTURES / "uncoded-dx-and-allergies.txt").read_text(encoding="utf-8")
+    page.get_by_test_id("dash-paste-text").fill(text)
+    page.get_by_test_id("dash-paste-apply").click()
+    expect_extracted(
+        page,
+        name="Rosa M. Delgado",
+        dob="1944-04-18",
+        hospital="St. Mary Medical Center",
+        diagnosis="Type 2 diabetes mellitus",
+        payer="medicare",
+        source_snippet="Rosa M. Delgado",
+    )
+    wait_for_suggested_codes(page, {
+        "Type 2 diabetes mellitus": "E11.9",
+        "Hypertension": "I10",
+        "CHF": "I50.9",
+        "COPD": "J44.9",
+        "CKD stage 3": "N18.30",
+        "Dementia": "F03.90",
+    })
+    rows = diagnosis_rows(page)
+    by_desc = {r["description"]: r for r in rows}
+    assert "suggested" in by_desc["Hypertension"]["badge"].lower()
+    assert "suggested" in by_desc["Type 2 diabetes mellitus"]["badge"].lower()
+
+    allergens = allergy_rows(page)
+    names = {a["allergen"].lower(): a for a in allergens}
+    assert "pcn" in names, allergens
+    assert names["pcn"]["reaction"].lower() == "rash"
+    assert names["pcn"]["type"] == "drug"
+    assert "sulfa" in names
+    expect(page.get_by_test_id("allergies-banner")).to_contain_text("Allergies are listed")
+    expect(page.get_by_test_id("allergies-legend-badge")).to_be_visible()
+    expect(page.get_by_test_id("diagnosis-code-alternatives").first).to_contain_text("E11.9")
+
+    page.get_by_test_id("toast").evaluate("el => el.hidden = true")
+    page.set_viewport_size({"width": 1440, "height": 2400})
+    page.evaluate(
+        """() => {
+          const dlg = document.querySelector("#referral-dialog");
+          const form = document.querySelector("#referral-form");
+          if (dlg) { dlg.style.maxHeight = "none"; dlg.style.height = "auto"; dlg.style.width = "min(820px, calc(100vw - 24px))"; }
+          if (form) { form.style.maxHeight = "none"; form.style.overflow = "visible"; }
+        }"""
+    )
+    page.wait_for_timeout(200)
+    page.locator("#referral-dialog").screenshot(path=str(ROOT / "diagnoses-form.png"))
+    page.set_viewport_size({"width": 1440, "height": 900})
+
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Rosa M. Delgado")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("I10")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("suggested")
+    expect(page.get_by_test_id("allergies-detail")).to_contain_text("PCN")
+    expect(page.get_by_test_id("allergies-detail")).to_contain_text("sulfa")
+    expect(page.get_by_test_id("accept-template")).to_contain_text("Allergies: PCN")
+    expect(page.get_by_test_id("accept-template")).to_contain_text("E11.9")
+    expect(page.get_by_test_id("accept-template")).to_contain_text("suggested")
+
+    page.get_by_test_id("nav-referrals").click()
+    page.get_by_test_id("search-input").fill("PCN")
+    expect(page.get_by_test_id("referral-list")).to_contain_text("Rosa M. Delgado")
+
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    page.get_by_test_id("nav-settings").click()
+    with page.expect_download() as csv_info:
+        page.get_by_test_id("export-csv-btn").click()
+    csv_path = DOWNLOADS / csv_info.value.suggested_filename
+    csv_info.value.save_as(str(csv_path))
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "Rosa M. Delgado" in csv_text
+    assert "E11.9" in csv_text
+    assert "suggested" in csv_text
+    assert "PCN" in csv_text
+    assert "Allergies" in csv_text
+
+    with page.expect_download() as json_info:
+        page.get_by_test_id("export-json-btn").click()
+    json_path = DOWNLOADS / json_info.value.suggested_filename
+    json_info.value.save_as(str(json_path))
+    raw = json_path.read_text(encoding="utf-8")
+    assert "Rosa M. Delgado" in raw
+    assert "suggested" in raw
+    assert "PCN" in raw
+
+
 def main():
     httpd = start_server()
     errors = []
@@ -438,6 +570,12 @@ def main():
         expect(page.get_by_test_id("stat-new")).to_contain_text("0")
 
         test_multi_diagnosis_extraction(page)
+        page.get_by_test_id("nav-settings").click()
+        page.get_by_test_id("clear-confirm").fill("DELETE")
+        page.get_by_test_id("clear-all-btn").click()
+        expect(page.get_by_test_id("stat-new")).to_contain_text("0")
+
+        test_suggested_codes_and_allergies(page)
         page.get_by_test_id("nav-settings").click()
         page.get_by_test_id("clear-confirm").fill("DELETE")
         page.get_by_test_id("clear-all-btn").click()
