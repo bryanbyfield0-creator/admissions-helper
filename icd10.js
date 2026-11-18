@@ -475,7 +475,9 @@
       } else if (next.description) {
         const from = suggest(next.description, { limit });
         for (const hit of from) suggestions.push(hit);
-        if (from[0] && from[0].billable) {
+        if (options.autofill === false) {
+          // Leave the diagnosis uncoded; suggestions are offered in the picker.
+        } else if (from[0] && from[0].billable) {
           next.code = from[0].code;
           next.codeSource = "suggested";
           next.codeStatus = "valid";

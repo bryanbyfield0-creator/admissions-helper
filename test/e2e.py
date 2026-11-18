@@ -206,7 +206,7 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("referral-dob")).to_have_value("1948-03-14")
     expect(page.get_by_test_id("referral-hospital")).to_have_value("Inland Valley Medical Center")
     expect(page.get_by_test_id("referral-diagnosis")).to_have_value("Right hip fracture, s/p ORIF")
-    wait_for_suggested_codes(page, {"Hypertension": "I10", "Type 2 diabetes mellitus": "E11.9"})
+    wait_for_uncoded_with_suggestions(page, {"Hypertension": "I10", "Type 2 diabetes mellitus": "E11.9"})
     jane_dx = diagnosis_rows(page)
     assert [r["description"] for r in jane_dx] == [
         "Right hip fracture, s/p ORIF",
@@ -215,8 +215,9 @@ def add_pdf_referral(page):
     ], jane_dx
     assert jane_dx[0]["primary"] is True
     by_desc = {r["description"]: r for r in jane_dx}
-    assert by_desc["Hypertension"]["code"] == "I10"
-    assert by_desc["Type 2 diabetes mellitus"]["code"] == "E11.9"
+    assert by_desc["Hypertension"]["code"] == ""
+    assert by_desc["Type 2 diabetes mellitus"]["code"] == ""
+    expect(page.get_by_test_id("verify-pill").first).to_be_visible()
     expect(page.get_by_test_id("referral-payer")).to_have_value("medicare-medicaid")
     expect(page.get_by_test_id("referral-date-received")).to_have_value("2026-11-13")
     expect(page.get_by_test_id("referral-expected-admit")).to_have_value("2026-11-14")
@@ -230,9 +231,7 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Right hip fracture, s/p ORIF")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Type 2 diabetes mellitus")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("I10")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("suggested")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("not listed")
 
 
@@ -370,6 +369,24 @@ def wait_for_suggested_codes(page, expected, timeout=20000):
     )
 
 
+def wait_for_uncoded_with_suggestions(page, expected, timeout=20000):
+    """Uncoded diagnoses stay uncoded (no invented code) but the picker offers codes."""
+    page.wait_for_function(
+        """(expected) => {
+          const rows = [...document.querySelectorAll('[data-testid=diagnosis-row]')];
+          return Object.entries(expected).every(([desc, code]) => {
+            const row = rows.find((r) => (r.querySelector('[data-testid=diagnosis-description]')?.value || '').trim() === desc);
+            if (!row) return false;
+            const own = (row.querySelector('[data-testid=diagnosis-code]')?.value || '').trim();
+            const alts = [...row.querySelectorAll('[data-testid=diagnosis-code-alternatives] option')].map((o) => o.value);
+            return own === '' && alts.includes(code);
+          });
+        }""",
+        arg=expected,
+        timeout=timeout,
+    )
+
+
 def allergy_rows(page):
     rows = page.get_by_test_id("allergy-row")
     out = []
@@ -465,7 +482,7 @@ def test_suggested_codes_and_allergies(page):
         payer="medicare",
         source_snippet="Rosa M. Delgado",
     )
-    wait_for_suggested_codes(page, {
+    wait_for_uncoded_with_suggestions(page, {
         "Type 2 diabetes mellitus": "E11.9",
         "Hypertension": "I10",
         "CHF": "I50.9",
@@ -474,9 +491,10 @@ def test_suggested_codes_and_allergies(page):
         "Dementia": "F03.90",
     })
     rows = diagnosis_rows(page)
-    by_desc = {r["description"]: r for r in rows}
-    assert "suggested" in by_desc["Hypertension"]["badge"].lower()
-    assert "suggested" in by_desc["Type 2 diabetes mellitus"]["badge"].lower()
+    assert all(r["code"] == "" for r in rows), rows
+    # The user picks a code from the suggestions for the primary diagnosis.
+    page.get_by_test_id("diagnosis-code-alternatives").first.select_option("E11.9")
+    expect(page.get_by_test_id("diagnosis-code").first).to_have_value("E11.9")
 
     allergens = allergy_rows(page)
     names = {a["allergen"].lower(): a for a in allergens}
@@ -484,7 +502,8 @@ def test_suggested_codes_and_allergies(page):
     assert names["pcn"]["reaction"].lower() == "rash"
     assert names["pcn"]["type"] == "drug"
     assert "sulfa" in names
-    expect(page.get_by_test_id("allergies-banner")).to_contain_text("Allergies are listed")
+    expect(page.get_by_test_id("allergies-banner")).to_contain_text("Allergies are safety-critical")
+    expect(page.get_by_test_id("allergies-verify-note")).to_be_visible()
     expect(page.get_by_test_id("allergies-legend-badge")).to_be_visible()
     expect(page.get_by_test_id("diagnosis-code-alternatives").first).to_contain_text("E11.9")
 
@@ -505,13 +524,12 @@ def test_suggested_codes_and_allergies(page):
     page.get_by_test_id("save-referral-btn").click()
     expect(page.get_by_test_id("view-detail")).to_contain_text("Rosa M. Delgado")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("I10")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("suggested")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("PCN")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("sulfa")
     expect(page.get_by_test_id("accept-template")).to_contain_text("Allergies: PCN")
     expect(page.get_by_test_id("accept-template")).to_contain_text("E11.9")
-    expect(page.get_by_test_id("accept-template")).to_contain_text("suggested")
 
     page.get_by_test_id("nav-referrals").click()
     page.get_by_test_id("search-input").fill("PCN")
@@ -526,7 +544,6 @@ def test_suggested_codes_and_allergies(page):
     csv_text = csv_path.read_text(encoding="utf-8")
     assert "Rosa M. Delgado" in csv_text
     assert "E11.9" in csv_text
-    assert "suggested" in csv_text
     assert "PCN" in csv_text
     assert "Allergies" in csv_text
 
@@ -536,7 +553,6 @@ def test_suggested_codes_and_allergies(page):
     json_info.value.save_as(str(json_path))
     raw = json_path.read_text(encoding="utf-8")
     assert "Rosa M. Delgado" in raw
-    assert "suggested" in raw
     assert "PCN" in raw
 
 

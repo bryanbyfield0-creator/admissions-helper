@@ -57,6 +57,7 @@
   let filterPayer = "";
   let filledFromPdf = new Set();
   let extractRaw = "";
+  let codesVerified = false;
   let extractName = "";
   let toastTimer = 0;
 
@@ -519,6 +520,10 @@
   }
 
   function codeBadgeHtml(d, testId) {
+    if (d && !d.code && d.fromFile && d.description) {
+      const idAttr = testId ? ` data-testid="${testId}"` : "";
+      return `<span class="dx-badge dx-badge-nocode"${idAttr} title="The referral listed this diagnosis without an ICD-10 code. Pick one from the suggestions if you need it.">no code in referral</span>`;
+    }
     if (!d || !d.code) return "";
     let cls = "";
     let label = "";
@@ -749,8 +754,10 @@
   function diagnosisRowEl(item) {
     const d = item || { code: "", description: "", primary: false, codeSource: "", codeStatus: "", suggestions: [] };
     const row = document.createElement("div");
-    row.className = "dx-row";
+    row.className = "dx-row" + (d.fromFile ? " from-file" : "");
     row.setAttribute("data-testid", "diagnosis-row");
+    row.dataset.fromFile = d.fromFile ? "1" : "";
+    if (d.sourceText) row.dataset.sourceText = d.sourceText;
     row.dataset.codeSource = d.codeSource || "";
     row.dataset.codeStatus = d.codeStatus || "";
     const suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
@@ -771,8 +778,9 @@
         <input type="text" class="dx-code" data-testid="diagnosis-code" maxlength="16" placeholder="ICD-10" value="${escapeHtml(d.code || "")}" autocomplete="off" spellcheck="false" />
         ${badge}
       </div>
-      <input type="text" class="dx-desc" data-testid="diagnosis-description" maxlength="400" placeholder="Description" value="${escapeHtml(d.description || "")}" />
+      <textarea class="dx-desc" data-testid="diagnosis-description" maxlength="400" rows="1" placeholder="Description">${escapeHtml(d.description || "")}</textarea>
       <button type="button" class="btn small" data-remove-dx="1" data-testid="remove-diagnosis">Remove</button>
+      ${d.fromFile ? VERIFY_PILL : ""}
       <select class="dx-alts" data-testid="diagnosis-code-alternatives" ${hasAlts ? "" : "disabled hidden"}>
         <option value="">Search or pick another code…</option>
         ${altOptions}
@@ -781,12 +789,48 @@
     return row;
   }
 
-  function renderDiagnosisRows(items) {
+  function autosizeDesc(el) {
+    if (!el || el.tagName !== "TEXTAREA") return;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(el.scrollHeight, 38)}px`;
+  }
+
+  function autosizeAllDesc() {
+    $$("#diagnoses-list .dx-desc").forEach(autosizeDesc);
+  }
+
+  function renderDiagnosisRows(items, { fromFile = false } = {}) {
     const box = $("#diagnoses-list");
     if (!box) return;
     box.innerHTML = "";
     const rows = items && items.length ? items : [{ code: "", description: "", primary: true }];
-    rows.forEach((d) => box.appendChild(diagnosisRowEl(d)));
+    rows.forEach((d) => {
+      const item = fromFile && (d.code || d.description) ? Object.assign({}, d, { fromFile: true }) : d;
+      box.appendChild(diagnosisRowEl(item));
+    });
+    updateFromFileNote("diagnoses");
+    requestAnimationFrame(autosizeAllDesc);
+  }
+
+  const VERIFY_PILL = `<span class="verify-pill" data-testid="verify-pill" title="Filled in from the referral. Check it against the file, then edit or remove it.">Please verify</span>`;
+
+  function markRowReviewed(row) {
+    if (!row || row.dataset.fromFile !== "1") return;
+    row.dataset.fromFile = "";
+    row.classList.remove("from-file");
+    row.querySelectorAll(".verify-pill").forEach((el) => el.remove());
+    updateFromFileNote(row.classList.contains("dx-row") ? "diagnoses" : "allergies");
+  }
+
+  function updateFromFileNote(kind) {
+    const list = kind === "diagnoses" ? $("#diagnoses-list") : $("#allergies-list");
+    const note = kind === "diagnoses" ? $("#diagnoses-verify-note") : $("#allergies-verify-note");
+    if (!list || !note) return;
+    const n = list.querySelectorAll(".from-file").length;
+    note.hidden = n === 0;
+    note.textContent = n === 1
+      ? "1 item was filled in from the referral. Please verify it against the file."
+      : `${n} items were filled in from the referral. Please verify each one against the file.`;
   }
 
   function readDiagnosesList() {
@@ -804,6 +848,8 @@
         codeSource: row.dataset.codeSource || "",
         codeStatus: row.dataset.codeStatus || "",
         suggestions,
+        fromFile: row.dataset.fromFile === "1",
+        sourceText: row.dataset.sourceText || "",
       };
     }).filter((d) => d.code || d.description);
   }
@@ -852,9 +898,17 @@
     }
     const current = readDiagnosesList();
     if (!current.length) return;
-    const next = AdmissionsICD.applyToDiagnoses(current);
+    // Never invent a code for a diagnosis the referral listed without one:
+    // offer suggestions in the picker only.
+    const next = AdmissionsICD.applyToDiagnoses(current, { autofill: false });
     const primaryValue = $("#referral-diagnosis")?.value;
-    renderDiagnosisRows(next);
+    const box = $("#diagnoses-list");
+    if (box) {
+      box.innerHTML = "";
+      next.forEach((d) => box.appendChild(diagnosisRowEl(d)));
+      updateFromFileNote("diagnoses");
+      requestAnimationFrame(autosizeAllDesc);
+    }
     if (primaryValue && $("#referral-diagnosis")) $("#referral-diagnosis").value = primaryValue;
   }
 
@@ -894,7 +948,16 @@
     const list = $("#diagnoses-list");
     const addBtn = $("#add-diagnosis-btn");
     if (addBtn) addBtn.addEventListener("click", () => {
-      if (list) list.appendChild(diagnosisRowEl({ code: "", description: "", primary: false }));
+      if (list) list.appendChild(diagnosisRowEl({ code: "", description: "", primary: !list.querySelector(".dx-row") }));
+    });
+    const clearBtn = $("#clear-diagnoses-btn");
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+      renderDiagnosisRows([]);
+      const field = $("#referral-diagnosis");
+      if (field && filledFromPdf.has("diagnosis")) field.value = "";
+      filledFromPdf.delete("diagnoses");
+      markPdfFields();
+      toast("All diagnoses cleared. Add the correct ones by hand.");
     });
     if (!list) return;
     list.addEventListener("click", (e) => {
@@ -910,9 +973,11 @@
         if (desc) desc.value = "";
         if (pri) pri.checked = true;
         updateRowCodeMeta(row, { source: "", status: "", suggestions: [] });
+        markRowReviewed(row);
       } else {
         const wasPrimary = !!row.querySelector(".dx-primary-input")?.checked;
         row.remove();
+        updateFromFileNote("diagnoses");
         if (wasPrimary) {
           const first = list.querySelector(".dx-primary-input");
           if (first) first.checked = true;
@@ -921,6 +986,7 @@
       syncPrimaryDiagnosisField();
     });
     list.addEventListener("change", (e) => {
+      markRowReviewed(e.target.closest(".dx-row"));
       if (e.target.classList.contains("dx-primary-input")) syncPrimaryDiagnosisField();
       if (e.target.classList.contains("dx-alts")) {
         const row = e.target.closest(".dx-row");
@@ -938,6 +1004,8 @@
     });
     let searchTimer = 0;
     list.addEventListener("input", (e) => {
+      markRowReviewed(e.target.closest(".dx-row"));
+      if (e.target.classList.contains("dx-desc")) autosizeDesc(e.target);
       if (e.target.classList.contains("dx-code") || e.target.classList.contains("dx-desc")) {
         const row = e.target.closest(".dx-row");
         if (row?.querySelector(".dx-primary-input")?.checked) syncPrimaryDiagnosisField();
@@ -971,11 +1039,13 @@
   ];
   const ALLERGY_SEVERITIES = ["", "mild", "moderate", "severe", "life-threatening"];
 
-  function allergyRowEl(item) {
+  function allergyRowEl(item, { fromFile = false } = {}) {
     const a = item || { allergen: "", reaction: "", severity: "", type: "" };
     const row = document.createElement("div");
-    row.className = "allergy-row";
+    const fromFileRow = fromFile && !!a.allergen;
+    row.className = "allergy-row" + (fromFileRow ? " from-file" : "");
     row.setAttribute("data-testid", "allergy-row");
+    row.dataset.fromFile = fromFileRow ? "1" : "";
     const sevOpts = ALLERGY_SEVERITIES.map((s) => `<option value="${escapeHtml(s)}"${a.severity === s ? " selected" : ""}>${s ? escapeHtml(s) : "Severity"}</option>`).join("");
     const typeOpts = ALLERGY_TYPES.map((s) => `<option value="${escapeHtml(s.id)}"${a.type === s.id ? " selected" : ""}>${escapeHtml(s.label)}</option>`).join("");
     row.innerHTML = `
@@ -984,38 +1054,44 @@
       <select class="allergy-severity" data-testid="allergy-severity">${sevOpts}</select>
       <select class="allergy-type" data-testid="allergy-type">${typeOpts}</select>
       <button type="button" class="btn small" data-remove-allergy="1" data-testid="remove-allergy">Remove</button>
+      ${fromFileRow ? VERIFY_PILL : ""}
     `;
     return row;
   }
+
+  let allergiesFromFile = false;
 
   function updateAllergiesBanner(status) {
     const banner = $("#allergies-banner");
     if (!banner) return;
     banner.className = "allergy-banner";
+    banner.hidden = false;
     if (status === "nkda") {
-      banner.hidden = false;
       banner.classList.add("allergy-banner-nkda");
-      banner.textContent = "No known allergies (NKDA). This was recorded explicitly — it is not the same as a missing allergy section.";
+      banner.textContent = allergiesFromFile
+        ? "The referral says no known allergies (NKDA). Please verify this against the file before you save."
+        : "No known allergies (NKDA) is recorded. This is different from allergies that were never checked.";
     } else if (status === "listed") {
-      banner.hidden = false;
       banner.classList.add("allergy-banner-listed");
-      banner.textContent = "Allergies are listed. This is safety-critical — review every item before you save or admit.";
+      banner.textContent = "Allergies are safety-critical. Check every item against the referral before you save or admit.";
     } else {
-      banner.hidden = false;
       banner.classList.add("allergy-banner-unknown");
-      banner.textContent = "No allergy section was found in the referral. Confirm allergies before admission.";
+      banner.textContent = allergiesFromFile
+        ? "None found — check the file. No allergy list was found in this referral, so nothing was filled in. Confirm allergies with the hospital before admission."
+        : "Allergies have not been recorded yet. Add each allergy, or tick NKDA if the patient has none.";
     }
   }
 
-  function renderAllergyEditor(allergies) {
+  function renderAllergyEditor(allergies, { fromFile = false } = {}) {
     const box = $("#allergies-list");
     const nkda = $("#allergies-nkda");
     if (!box) return;
+    allergiesFromFile = !!fromFile;
     const data = allergies || { status: "unknown", items: [] };
     box.innerHTML = "";
     if (nkda) nkda.checked = data.status === "nkda";
     if (data.status === "listed" && data.items && data.items.length) {
-      data.items.forEach((item) => box.appendChild(allergyRowEl(item)));
+      data.items.forEach((item) => box.appendChild(allergyRowEl(item, { fromFile })));
     } else if (data.status !== "nkda") {
       box.appendChild(allergyRowEl({}));
     }
@@ -1023,6 +1099,7 @@
     const addBtn = $("#add-allergy-btn");
     if (addBtn) addBtn.hidden = data.status === "nkda";
     updateAllergiesBanner(data.status || "unknown");
+    updateFromFileNote("allergies");
   }
 
   function readAllergies() {
@@ -1076,11 +1153,23 @@
       if (rows.length <= 1) {
         row.querySelectorAll("input").forEach((el) => { el.value = ""; });
         row.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
+        markRowReviewed(row);
       } else {
         row.remove();
+        updateFromFileNote("allergies");
       }
     });
-    if (list) list.addEventListener("input", () => {
+    const clearBtn = $("#clear-allergies-btn");
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+      allergiesFromFile = false;
+      renderAllergyEditor({ status: "unknown", items: [] });
+      filledFromPdf.delete("allergies");
+      markPdfFields();
+      toast("All allergies cleared. Add them by hand or tick NKDA.");
+    });
+    if (list) list.addEventListener("change", (e) => markRowReviewed(e.target.closest(".allergy-row")));
+    if (list) list.addEventListener("input", (e) => {
+      markRowReviewed(e.target.closest(".allergy-row"));
       if (nkda && nkda.checked) return;
       const hasItems = $$("#allergies-list [data-testid='allergy-row']").some((row) => (row.querySelector(".allergy-allergen")?.value || "").trim());
       if (hasItems) updateAllergiesBanner("listed");
@@ -1171,6 +1260,7 @@
     if (typeof dlg.showModal === "function") dlg.showModal();
     else dlg.setAttribute("open", "");
     $("#referral-name").focus();
+    requestAnimationFrame(autosizeAllDesc);
   }
 
   function closeReferralForm() {
@@ -1510,7 +1600,7 @@
       if (typeof Tesseract !== "undefined") return resolve();
       const abs = vendorUrl("vendor/tesseract/tesseract.min.js");
       const existing = document.querySelector(`script[data-ocr-src="${abs}"]`);
-      const fail = () => reject(new Error("The on-device scanner could not be loaded. Enter the details by hand."));
+      const fail = () => reject(new Error("The on-device text reader (OCR) could not be loaded. Enter the details by hand."));
       if (existing) {
         existing.addEventListener("load", () => resolve(), { once: true });
         existing.addEventListener("error", fail, { once: true });
@@ -1534,7 +1624,7 @@
         await emitProgress(onProgress, "Preparing to read a scanned page...");
         await loadTesseractScript();
         if (typeof Tesseract === "undefined" || typeof Tesseract.createWorker !== "function") {
-          throw new Error("The on-device scanner could not be loaded. Enter the details by hand.");
+          throw new Error("The on-device text reader (OCR) could not be loaded. Enter the details by hand.");
         }
         return await Tesseract.createWorker("eng", 1, {
           workerPath: vendorUrl("vendor/tesseract/worker.min.js"),
@@ -1771,12 +1861,49 @@
     return text;
   }
 
-  function applyExtractedText(text, sourceName, toastMessage) {
+  async function loadCodeLookup(where) {
+    if (typeof AdmissionsICD === "undefined") return null;
+    try {
+      if (!AdmissionsICD.isReady()) setImportProgress("Checking codes against the ICD-10-CM list…", where);
+      await AdmissionsICD.ensureLoaded();
+      return (code) => {
+        const e = AdmissionsICD.lookup(code);
+        return e ? { code: e.code, description: e.description, billable: e.billable } : null;
+      };
+    } catch (err) {
+      console.warn(err);
+      return null;
+    }
+  }
+
+  const EXTRACTED_FIELD_IDS = {
+    name: "referral-name",
+    dob: "referral-dob",
+    hospital: "referral-hospital",
+    diagnosis: "referral-diagnosis",
+    payer: "referral-payer",
+    payerNotes: "referral-payer-notes",
+    expectedAdmitDate: "referral-expected-admit",
+  };
+
+  async function applyExtractedText(text, sourceName, toastMessage, where) {
     extractRaw = text;
     extractName = sourceName || "";
     showExtract();
-    const guessed = AdmissionsExtract.extractFields(text);
+    const lookup = await loadCodeLookup(where || "dialog");
+    const guessed = AdmissionsExtract.extractFields(text, lookup ? { lookup } : undefined);
+    // Clear values a previous import filled in, so a second file never
+    // leaves the first file's details behind. Typed values are kept.
+    for (const key of filledFromPdf) {
+      const id = EXTRACTED_FIELD_IDS[key];
+      const el = id && document.getElementById(id);
+      if (el) el.value = "";
+    }
+    if (filledFromPdf.has("dateReceived")) $("#referral-date-received").value = todayISO();
+    if (filledFromPdf.has("notes")) $("#referral-notes").value = "";
+    $$("[data-need]").forEach((box) => { if (box.dataset.fromFile === "1") { box.checked = false; delete box.dataset.fromFile; } });
     filledFromPdf = new Set();
+    codesVerified = !!lookup;
     const apply = (id, key, value) => {
       if (!value) return;
       const el = document.getElementById(id);
@@ -1788,9 +1915,9 @@
     apply("referral-dob", "dob", guessed.dob);
     apply("referral-hospital", "hospital", guessed.hospital);
     apply("referral-diagnosis", "diagnosis", guessed.diagnosis);
-    renderDiagnosisRows(guessed.diagnoses || []);
+    renderDiagnosisRows(guessed.diagnoses || [], { fromFile: true });
     if (guessed.diagnoses && guessed.diagnoses.length) filledFromPdf.add("diagnoses");
-    renderAllergyEditor(guessed.allergies || { status: "unknown", items: [] });
+    renderAllergyEditor(guessed.allergies || { status: "unknown", items: [] }, { fromFile: true });
     if (guessed.allergies && guessed.allergies.status && guessed.allergies.status !== "unknown") filledFromPdf.add("allergies");
     enhanceDiagnosesWithCodes();
     apply("referral-payer", "payer", guessed.payer);
@@ -1803,8 +1930,9 @@
     }
     for (const id of guessed.needs) {
       const box = $(`[data-need="${id}"]`);
-      if (box) box.checked = true;
+      if (box && !box.checked) { box.checked = true; box.dataset.fromFile = "1"; }
     }
+    if (!lookup) toast("Codes could not be checked against the ICD-10-CM list on this device. Verify every code by hand.");
     $("#review-banner").hidden = filledFromPdf.size === 0 && !guessed.needs.length;
     markPdfFields();
     toast(toastMessage || "The file was read on this device. Review before you save.");
@@ -1827,11 +1955,11 @@
     try {
       const text = await readReferralFile(file, (message) => setImportProgress(message, where));
       if (where === "dash") openReferralForm();
-      applyExtractedText(text, file.name, "The file was read on this device. Review before you save.");
+      await applyExtractedText(text, file.name, "The file was read on this device. Please verify every item before you save.", where === "dash" ? "dialog" : where);
     } catch (err) {
       console.error(err);
       let message = err && err.message ? err.message : "This file could not be read. Enter the details by hand.";
-      if (fileKind(file) === "pdf" && !/readable text|password|protected|image-only|not supported|scanned|handwriting|blurry|scanner could not/i.test(message)) {
+      if (fileKind(file) === "pdf" && !/readable text|password|protected|image-only|not supported|scanned|handwriting|blurry|scanner could not|text reader/i.test(message)) {
         message = "This PDF could not be read. It may be password-protected or damaged. Enter the details by hand.";
       }
       setImportError(message, where);
@@ -1851,7 +1979,7 @@
     }
     if (where === "dash") openReferralForm();
     hidePastePanels();
-    applyExtractedText(cleaned, "Pasted text", "The pasted text was read on this device. Review before you save.");
+    await applyExtractedText(cleaned, "Pasted text", "The pasted text was read on this device. Please verify every item before you save.", "dialog");
   }
 
   function bindDropzone(el, onFile) {
@@ -2150,6 +2278,7 @@
   }
 
   window.__weesheePass = "";
+  window.addEventListener("resize", () => autosizeAllDesc());
   if (typeof AdmissionsICD !== "undefined" && AdmissionsICD.ensureLoaded) {
     AdmissionsICD.ensureLoaded().catch((err) => console.warn(err));
   }

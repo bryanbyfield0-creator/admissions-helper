@@ -1,0 +1,34 @@
+PointClickCare - Admission Record
+Facility: Willow Bend Post-Acute (WBPA)
+Resident: HARTLEY, MARGARET L (W10442)
+Date of Birth: 4/7/1937   Sex: Female   Marital Status: Widowed
+Admission Date: 11/10/2026   Room/Bed: 214-B
+Referral Date: 11/17/2026
+Anticipated Discharge Date: 11/20/2026
+Referring Hospital: Cedar Ridge Medical Center
+Primary Physician: Lindqvist, Erik MD   Phone: (555) 610-2290
+
+Contacts
+Contact Name   Relationship   Phone
+Hartley, Paul   Son / POA   (555) 610-4471 x E10
+
+Payer Information
+Primary Payer: Medicare A   Policy #: 5KX2-AB7-TT41
+Secondary Payer: Blue Cross Blue Shield Supplement   Group: F32
+
+Diagnosis Information
+Code      Description                                                  Rank       Classification
+I63.9     Cerebral infarction, unspecified                             Primary    Admission
+R13.12    Dysphagia, oropharyngeal phase                               2          Admission
+I48.91    Unspecified atrial fibrillation                              3          Admission
+Z79.01    Long term (current) use of anticoagulants                    4          Admission
+E78.5     Hyperlipidemia, unspecified                                  5          Admission
+
+Allergies
+Allergen: Penicillin   Category: Drug   Reaction: Hives   Severity: Moderate
+Allergen: Shellfish   Category: Food   Reaction: Throat swelling   Severity: Severe
+Allergen: Adhesive tape   Category: Environmental   Reaction: Skin redness
+
+Advance Directives: DNR
+Diet: Mechanical soft, nectar-thick liquids
+Care Needs: PT, OT, speech therapy, tube feeding not required

@@ -1,0 +1,60 @@
+Printed by HOLLOWAY U40 again 11/13/2026 4:40:04 PM MST Page 1 of 4
+NORTHVALE REGIONAL MEDICAL CENTER
+Face Sheet
+DELACRUZ, MATEO ANDRES  MRN: 70031245  DOB: 06/02/1959  Age: 67 y.o.  Sex: M
+Encounter Date: 11/12/2026  Admit Date: 11/12/2026 7:15 PM  Unit: 4 West Bed 12B
+Attending Provider: Guru, Nila MD  Isolation: Cont Iso: MRSA G76
+Code Status: Full Code
+Contacts
+Name Relation Home Work Mobile Y92.029
+Delacruz Ana  Spouse  555-201-4477  555-201-9910
+Phillps Weston _ friend 599 9492 B06
+Insurance
+Payer: MT MEDICAID  Plan: MEDICAID MT  Group: 88120
+Subscriber Tedpatric  Subscriber ID: Z87891234
+Delacruz M Subscriber  Relation to Subscriber: Self
+Guarantor: Delacruz, Mateo A  Phone: 555-201-4477
+Infection Status: MRSA (11/12/26)  Bugs: MRSA
+IP Risk of Unplanned Readmission: 18%
+
+History and Physical
+Chief Complaint: Left leg redness and swelling x 4 days
+History of Present Illness: 67 y.o. male with HTN and anxiety presents with LLE erythema, warmth and swelling. Febrile to 38.6 in ED.
+
+Allergies
+Allergen Reactions
+Penicillins Hives
+Sulfa (Sulfonamide Antibiotics) Rash
+Lisinopril Swelling
+Reviewed On: 11/12/2026 By: Holloway, Rae RN
+
+Past Medical History
+Diagnosis Date
+Anxiety
+High blood pressure
+Type 2 diabetes mellitus (CMS/HCC)
+
+SURGICAL HISTORY
+Procedure Laterality Date
+Hernia Repair 2014
+Appendectomy 1988
+
+Medications Prior to Admission
+metFORMIN 500 mg tablet Take 500 mg by mouth 2 (two) times daily with meals
+amLODIPine 10 mg tablet Take 10 mg by mouth daily
+
+Hospital Problem List
+Principal Problem: Cellulitis of left lower extremity [L03.116]
+Active Problems:
+Essential hypertension [I10]
+Type 2 diabetes mellitus without complication [E11.9]
+Anxiety disorder [F41.9]
+
+Assessment and Plan
+LLE cellulitis
+Concern for MRSA
+- Continue IV vancomycin, blood cultures pending
+- Wound care consult, elevate leg
+- PT/OT eval for discharge to SNF
+
+Printed by HOLLOWAY again 11/13/2026 4:40:04 PM MST Page 4 of 4

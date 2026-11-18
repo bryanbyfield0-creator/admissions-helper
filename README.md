@@ -9,7 +9,10 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 ## What you can do
 
 - Log a referral (name or initials, date of birth, hospital, diagnoses with ICD-10 codes, allergies, payer, care needs, and notes)
-- Drop a referral PDF, Word file (.docx), text, or a photo (JPG, PNG, or HEIC) onto the dashboard, or paste email text, then review suggested fields before you save. The tracker finds every diagnosis and ICD-10-CM code in the text, suggests official codes when a diagnosis is listed without one, and captures allergies (including NKDA). Image-only scanned PDFs and photos are read on this device.
+- Drop a referral PDF, Word file (.docx), text, or a photo (JPG, PNG, or HEIC) onto the dashboard, or paste email text, then check the filled-in fields before you save. Every item filled in from a referral is marked **Please verify** until you edit or confirm it, and each list has a **Clear all** button. Anything the tracker is not sure about is left blank instead of guessed.
+  - **Diagnoses** are read only from diagnosis, problem list, medical history and assessment sections. A code is kept only if it is in the official CMS ICD-10-CM code set (bundled with the app), and the official description is shown. Codes in contacts, insurance, provider, isolation and timestamp lines are ignored. Diagnoses listed without a code stay uncoded; suggested codes are offered in a picker but never filled in for you.
+  - **Allergies** are read only from the allergy section, up to the next section. NKDA / NKA / “No known allergies” is shown as NKDA. A reaction is filled in only when the referral names one (rash, hives, swelling, and so on). If no allergy section is found, the form says “None found — check the file.”
+  - Image-only scanned PDFs and photos are read on this device with OCR.
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
 - See today's expected admits, items still waiting on a decision, and a simple admission rate
@@ -32,10 +35,21 @@ This is a personal tracker, not an official medical record, EHR, or insurance sy
 - It does not verify insurance eligibility or obtain authorization.
 - It does not connect to an EHR, hospital portal, or payer system.
 - It cannot read password-protected PDFs or older Word .doc files. Handwriting, very blurry scans, and some HEIC photos (in browsers that cannot open that format) may not be readable. Enter those by hand.
-- Suggested ICD-10-CM codes come from the official CMS FY2027 code set bundled with the app, not from a live server. They are a starting point, not a coding decision. Review every suggested or document-listed code. The app does not confirm medical necessity or coding guidelines.
+- ICD-10-CM codes are checked against the official CMS FY2027 code set bundled with the app, not a live server. A code being valid does not make it the right code for the patient. Review every code. The app does not confirm medical necessity or coding guidelines.
+- Extraction is tuned for Epic-style face sheets and H&Ps, PointClickCare admission records, and typed referral emails. Unusual layouts, handwriting, or badly skewed scans can still be missed. When in doubt it leaves the field blank.
 
 ## Add it to your phone
 
 Open the link in your browser, then use Share or the browser menu and choose **Add to Home Screen**.
 
 pdf.js (Apache License 2.0) is included locally to read PDF text and to render scanned pages on the device. tesseract.js and its English language data (Apache License 2.0) are included locally so image-only scans and photos can be read in the browser; nothing is sent to a server. Word (.docx) files are unpacked in the browser.
+
+## Tests
+
+```
+for t in test/*.test.js; do node "$t"; done   # parser, allergy, ICD-10 and synthetic-referral tests
+python3 test/e2e.py && python3 test/qa_e2e.py && python3 test/ocr_e2e.py   # browser tests (Playwright)
+node scripts/compare-before-after.js           # item counts before vs after the parser rewrite
+```
+
+All test referrals in `test/fixtures` are synthetic. `scripts/make-epic-scans.py` renders them into noisy, image-only scanned PDFs, and `test/capture_ocr.py` saves what the app's on-device OCR reads from them.

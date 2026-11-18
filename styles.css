@@ -385,7 +385,7 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 .history li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
 .field { display: flex; flex-direction: column; gap: 5px; font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
 .field span.from-pdf::after {
-  content: " from file — review";
+  content: " — please verify";
   font-weight: 600;
   color: var(--amber);
   font-size: 0.72rem;
@@ -394,7 +394,7 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 .needs, .diagnoses { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; }
 .needs legend, .diagnoses legend { padding: 0 6px; font-weight: 700; font-size: 0.85rem; }
 .diagnoses legend.from-pdf::after {
-  content: " from file — review";
+  content: " — please verify";
   font-weight: 600;
   color: var(--amber);
   font-size: 0.72rem;
@@ -462,7 +462,7 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 .allergies { border: 2px solid #e3a39e; border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; background: #fff8f7; }
 .allergies legend { padding: 0 6px; font-weight: 800; font-size: 0.9rem; color: var(--danger); }
 .allergies legend.from-pdf::after {
-  content: " from file — review";
+  content: " — please verify";
   font-weight: 600;
   color: var(--amber);
   font-size: 0.72rem;
@@ -756,3 +756,45 @@ main { padding: 16px; max-width: 1280px; margin: 0 auto; }
   .board { grid-template-columns: repeat(6, minmax(220px, 80vw)); }
   .dialog { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; }
 }
+
+/* Items filled in from a referral: visible "please verify" cue until edited. */
+.verify-pill {
+  display: inline-block;
+  align-self: center;
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff4d6;
+  border: 1px solid #e0b44c;
+  color: #7a5200;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dx-row.from-file, .allergy-row.from-file {
+  border-left: 3px solid #e0b44c;
+  padding-left: 6px;
+  border-radius: 4px;
+  background: #fffcf2;
+}
+.dx-row .verify-pill { grid-column: 1 / -1; }
+.allergy-row .verify-pill { grid-column: 1 / -1; }
+.verify-note {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fff4d6;
+  color: #7a5200;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--muted); }
+
+.dx-row textarea.dx-desc {
+  font: inherit;
+  line-height: 1.35;
+  resize: vertical;
+  overflow: hidden;
+  display: block;
+}
+.dx-badge-nocode { background: #eef1f4; color: #4a5560; border: 1px solid #d5dbe1; }

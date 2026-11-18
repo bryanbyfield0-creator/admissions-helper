@@ -12,7 +12,7 @@
   <title>Admissions Tracker</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="favicon.svg" />
-  <link rel="stylesheet" href="styles.css?v=20261118ocr" />
+  <link rel="stylesheet" href="styles.css?v=20261118parser" />
 </head>
 <body>
   <div id="lock-screen" class="lock-screen" hidden data-testid="lock-screen">
@@ -185,7 +185,7 @@
             <ul class="plain">
               <li>This app runs only in your browser. There is no account and no server of ours that receives referrals.</li>
               <li>Records are stored in this browser’s local storage. Clearing site data, using another browser, or using another device will not show the same list unless you restore a backup.</li>
-              <li>Referral PDFs (including scanned packets), Word files (.docx), text files, and photos of referrals are read on this device so the text can be suggested into the form. Scanned pages are read with an on-device scanner. The file itself is not saved, and it is not sent anywhere.</li>
+              <li>Referral PDFs (including scanned packets), Word files (.docx), text files, and photos of referrals are read on this device so the text can be suggested into the form. Scanned pages are read with text recognition (OCR) that runs on this device. The file itself is not saved, and it is not sent anywhere.</li>
               <li>This is not connected to an EHR, payer portal, or insurance eligibility system. It does not score clinical fit or estimate reimbursement.</li>
               <li>Prefer initials instead of a full name when that is enough for your work.</li>
             </ul>
@@ -216,7 +216,7 @@
         <input type="file" id="pdf-upload" data-testid="pdf-upload" accept=".pdf,.docx,.txt,.csv,.md,.eml,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/csv,text/markdown,message/rfc822,image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif" hidden />
         <div class="dropzone-inner">
           <p class="dropzone-title">Drop a referral file here</p>
-          <p class="hint">PDF, Word (.docx), text, or a photo. Read on this device only. Suggested fields are a first pass — review before use.</p>
+          <p class="hint">PDF, Word (.docx), text, or a photo. Read on this device only. Filled-in items are marked “Please verify” until you check them.</p>
           <div class="btn-row dropzone-actions">
             <label class="btn" for="pdf-upload">Choose file</label>
             <button type="button" class="btn" id="dialog-paste-toggle" data-testid="dialog-paste-toggle">Paste text</button>
@@ -235,7 +235,7 @@
       </div>
 
       <div id="review-banner" class="review-banner" data-testid="review-banner" hidden>
-        Some fields were filled from the file or pasted text. Please review them before you save.
+        Fields marked <strong>Please verify</strong> were filled in from the referral. Check each one against the file before you save. Anything the tracker was not sure about was left blank.
       </div>
       <p class="form-error" id="pdf-error" data-testid="pdf-error" hidden></p>
 
@@ -253,7 +253,7 @@
           <input type="text" id="referral-hospital" data-testid="referral-hospital" maxlength="160" />
         </label>
         <label class="field">
-          <span>Diagnosis</span>
+          <span>Primary diagnosis</span>
           <input type="text" id="referral-diagnosis" data-testid="referral-diagnosis" maxlength="240" />
         </label>
         <label class="field">
@@ -278,17 +278,20 @@
 
       <fieldset class="diagnoses" id="diagnoses-fieldset" data-testid="diagnoses-fieldset">
         <legend>Diagnoses</legend>
-        <p class="hint">Every diagnosis found in the referral. Codes listed in the document are checked against the official ICD-10-CM set on this device. If a diagnosis has no code, a suggested code is filled in for you to verify. You can search by code or words and pick another match.</p>
+        <p class="hint">Diagnoses are read only from the referral's diagnosis, problem list, medical history and assessment sections. A code is kept only if it is in the official ICD-10-CM code set (stored on this device), and the official description is shown. Diagnoses listed without a code stay uncoded; you can pick a code from the suggestions if you need one.</p>
+        <p class="verify-note" id="diagnoses-verify-note" data-testid="diagnoses-verify-note" hidden></p>
         <div id="diagnoses-list" class="dx-list" data-testid="diagnoses-list"></div>
         <div class="btn-row">
           <button type="button" class="btn small" id="add-diagnosis-btn" data-testid="add-diagnosis-btn">Add diagnosis</button>
+          <button type="button" class="btn small ghost" id="clear-diagnoses-btn" data-testid="clear-diagnoses-btn">Clear all diagnoses</button>
         </div>
       </fieldset>
 
       <fieldset class="allergies" id="allergies-fieldset" data-testid="allergies-fieldset">
         <legend>Allergies <span class="allergy-safety-pill" data-testid="allergies-legend-badge">Safety</span></legend>
-        <p class="hint">Allergy information is safety-critical. Review it before you save. NKDA means no known allergies, which is different from a referral that never mentioned allergies.</p>
+        <p class="hint">Allergies are read only from the referral's allergy section. NKDA (no known drug allergies) is different from a referral that does not mention allergies.</p>
         <div id="allergies-banner" class="allergy-banner" data-testid="allergies-banner" hidden></div>
+        <p class="verify-note" id="allergies-verify-note" data-testid="allergies-verify-note" hidden></p>
         <label class="allergy-nkda">
           <input type="checkbox" id="allergies-nkda" data-testid="allergies-nkda" />
           No known allergies (NKDA)
@@ -296,6 +299,7 @@
         <div id="allergies-list" class="allergy-list" data-testid="allergies-list"></div>
         <div class="btn-row">
           <button type="button" class="btn small" id="add-allergy-btn" data-testid="add-allergy-btn">Add allergy</button>
+          <button type="button" class="btn small ghost" id="clear-allergies-btn" data-testid="clear-allergies-btn">Clear all allergies</button>
         </div>
       </fieldset>
 
@@ -327,8 +331,8 @@
   <div id="toast" class="toast" hidden data-testid="toast" role="status" aria-live="polite"></div>
 
   <script src="vendor/pdf.min.js"></script>
-  <script src="extract.js?v=20261118ocr"></script>
-  <script src="icd10.js?v=20261118ocr"></script>
-  <script src="app.js?v=20261118ocr"></script>
+  <script src="extract.js?v=20261118parser"></script>
+  <script src="icd10.js?v=20261118parser"></script>
+  <script src="app.js?v=20261118parser"></script>
 </body>
 </html>

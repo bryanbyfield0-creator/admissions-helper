@@ -1,0 +1,7 @@
+Patient Name: Harold B. Finch
+DOB: 05/05/1950
+Referring Hospital: Mount Pleasant Hospital
+Insurance: Aetna PPO
+Primary Diagnosis: Right knee replacement, aftercare Z47.1
+Care Needs: PT
+Notes: No isolation needed. Patient ambulates with walker.

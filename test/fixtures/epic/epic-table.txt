@@ -1,0 +1,28 @@
+Printed by BELL, T at 11/15/2026 1:22:10 PM CST Page 1 of 5
+ST. ODILE HOSPITAL
+PATIENT FACE SHEET
+OKONKWO, SAMUEL  MRN: 81240017  DOB: 09/30/1948  Sex: M
+Encounter: 11/14/2026  Attending Provider: Ferreira, Lucia MD  Isolation: Droplet C25
+Emergency Contacts
+Name Relation Home Work Mobile
+Okonkwo Grace  Daughter  555-882-0145  W19 555 6633
+Coverage
+Payer: HUMANA GOLD PLUS HMO  Member ID: H45109876
+Subscriber Okonkwo, Samuel  Group: S72
+Guarantor: Okonkwo, Samuel
+
+Drug Allergies:
+Allergen Reaction Severity Noted
+Codeine Nausea And Vomiting Moderate 03/02/2015
+Morphine Itching Mild 07/11/2019
+Aspirin 01/04/2020
+Latex Anaphylaxis High 05/05/2010
+
+Medications
+Eliquis 5 mg tablet BID
+
+Diagnoses
+Closed fracture of right femoral neck, initial encounter S72.001A
+Dementia without behavioral disturbance F03.90
+COPD J44.9
+History of falling

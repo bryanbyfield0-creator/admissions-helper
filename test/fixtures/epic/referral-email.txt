@@ -1,0 +1,21 @@
+From: Case Management <cm@example.org>
+Subject: SNF referral - bed request
+
+Hi team, sending a new referral for review.
+
+Patient Name: Robert T. Nguyen
+DOB: 12/01/1945
+Referring Hospital: Harbor View Hospital
+Insurance: Medicare Part A, Medi-Cal secondary
+Referral Date: 11/18/2026
+Expected Admit: 11/19/2026
+
+Diagnoses: Sepsis due to UTI; acute kidney injury; Type 2 diabetes mellitus
+
+Allergies: NKA
+
+Care Needs: IV antibiotics via PICC, PT/OT
+Notes: Patient lives alone, daughter is involved and visits daily.
+
+Thanks,
+Dana (Case Manager) 555-301-7788

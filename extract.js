@@ -1,5 +1,9 @@
-/* Diagnosis and referral-field extraction. Pure functions, no network, no DOM.
-   Loaded before app.js in the browser and required by the Node test suite. */
+/* Referral-field extraction. Pure functions, no network, no DOM.
+   Loaded before app.js in the browser and required by the Node test suite.
+
+   Design rule: precision over recall. A field the parser is not sure about is
+   left blank so the user fills it in, rather than guessed. Diagnoses and
+   allergies are only read from their own sections of the referral. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -7,44 +11,38 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  // ---------------------------------------------------------------------------
+  // Care needs (checkboxes). Kept conservative: each pattern needs a clear,
+  // specific phrase so "Isolation: None", "ST. MARY", "Pt is 80", "Stage IV" or
+  // "without behavioral disturbance" do not tick boxes.
   const NEED_KEYWORDS = [
-    { id: "pt", re: /\b(physical therapy|\bPT\b)\b/i },
-    { id: "ot", re: /\b(occupational therapy|\bOT\b)\b/i },
-    { id: "st", re: /\b(speech therapy|\bST\b|SLP)\b/i },
-    { id: "wound", re: /\bwound(?:\s*care|\s*vac)?\b/i },
-    { id: "iv", re: /\b(IV|intravenous)\b/i },
-    { id: "dialysis", re: /\bdialysis\b|\bhemodialysis\b|\bHD\b/i },
-    { id: "oxygen", re: /\boxygen\b|\bO2\b/i },
-    { id: "isolation", re: /\bisolation\b|\bcontact precautions\b|\bMRSA\b|\bC\.\s?diff/i },
-    { id: "trach", re: /\btrach(?:eostomy)?\b|\bventilator\b|\bvent\b/i },
-    { id: "tube", re: /\btube feeding\b|\bPEG\b|\bNG tube\b/i },
+    { id: "pt", re: /\bphysical therapy\b|(?:^|[\s,;:(\/])PT(?=[\s,;:)\/]|$)/m },
+    { id: "ot", re: /\boccupational therapy\b|(?:^|[\s,;:(\/])OT(?=[\s,;:)\/]|$)/m },
+    { id: "st", re: /\bspeech(?:\s*(?:language)?\s*therapy|\s*therapist)\b|\bSLP\b|\bST\s+(?:eval|evaluation|therapy)\b/i },
+    { id: "wound", re: /\bwound\s*(?:care|vac|consult|team)\b|\bpressure\s+(?:injury|ulcer)\b|\bwound\b(?=[,;\s]*(?:$|\n))/im },
+    { id: "iv", re: /\bIV\s+(?:antibiotics?|abx|fluids?|access|therapy|meds?|medications?|vanc\w*|zosyn|cefazolin|ceftriaxone|ertapenem|daptomycin|[a-z]+(?:mycin|cillin|cef\w*))\b|\bPICC\b|\bintravenous\b/i },
+    { id: "dialysis", re: /\b(?:hemo)?dialysis\b|\bHD\s+(?:M\/W\/F|MWF|T\/Th\/S|TTS|schedule|chair|days)\b/i },
+    { id: "oxygen", re: /\boxygen\b|\bO2\b|\b\d\s*L\s*(?:NC|nasal cannula)\b/i },
+    { id: "isolation", re: /\bcontact\s+(?:precautions|iso(?:lation)?)\b|\bcont(?:act)?\.?\s*iso\b|\bdroplet\b|\bairborne\b|\bMRSA\b|\bVRE\b|\bESBL\b|\bC\.?\s?diff|\bCRE\b|\bisolation\s*[:\-]\s*(?!none\b|no\b|n\/a\b|standard\b|not\b)[a-z]/i },
+    { id: "trach", re: /\btrach(?:eostomy)?\b|\bventilator\b|\bvent(?:ilated)?\s+(?:dependent|settings|patient)\b|\bBiPAP\b/i },
+    { id: "tube", re: /\btube\s*feed(?:ing|s)?\b|\bPEG\b|\bNG\s*tube\b|\bG-?tube\b|\benteral\b/i },
     { id: "bariatric", re: /\bbariatric\b/i },
-    { id: "behavior", re: /\b1:1\b|\bbehavioral\b|\bwandering\b/i },
+    { id: "behavior", re: /\b1:1\b|\bsitter\b|\bwander(?:ing|s)?\b|\belopement\b|\bbehaviou?ral\s+(?:issues|problems|concerns|needs|health)\b|\baggressi(?:ve|on)\b/i },
   ];
 
-  // ICD-10-CM: letter A–Z (U included so COVID codes like U07.1 are kept),
-  // then a digit, then an alnum category character, optional dot + 1–4 chars.
-  // The same shape without a dot (E119 → E11.9) is also accepted.
+  // ICD-10-CM shape: letter, digit, digit-or-letter, then optional "." + 1–4
+  // alphanumerics. Undotted long forms (E119) are accepted inside diagnosis
+  // sections only. Final say always goes to the bundled CMS code list.
   const ICD_BODY = "([A-Z][0-9][0-9A-Z](?:\\.[0-9A-Z]{1,4}|[0-9A-Z]{1,4})?)";
   const ICD_CODE_RE = new RegExp("\\b" + ICD_BODY + "\\b", "gi");
   const ICD_CODE_EXACT_RE = new RegExp("^" + ICD_BODY + "$", "i");
 
   const FALSE_POSITIVE_CODES = new Set([
-    "A1C", "B12", "B12A",
-    "D5W", "D5NS", "D10W", "D25W", "D50W", "D5LR", "D51W",
-    "Q1H", "Q2H", "Q3H", "Q4H", "Q6H", "Q8H", "Q12H", "Q24H",
+    "A1C", "B12", "B12A", "D5W", "D5NS", "D10W", "D25W", "D50W", "D5LR", "D51W",
+    "Q1H", "Q2H", "Q3H", "Q4H", "Q6H", "Q8H", "Q12H", "Q24H", "T10", "L45",
   ]);
-
-  const LEFT_CONTEXT_RE = /(?:room|rm\.?|apt\.?|apartment|suite|unit|bldg\.?|building|wing|bed|phone|tel\.?|fax|zip|postal|npi|dea|mrn|acct\.?|account|lot|batch|po\s*box|p\.?\s*o\.?\s*box|interstate|highway|hwy|route|vitamin|hba1c|hemoglobin|dose|injection|vaccine|lot\s*#|policy|mbi|member\s*id)\s*[:#.\-–]?\s*$/i;
   const FREQ_CODE_RE = /^Q\d{1,2}H$/i;
-
-  const DX_HEADER_RE = /^(?:((?:primary|principal|admitting)\s*(?:dx|diagnosis|diagnoses)?)|((?:secondary|other|additional)(?:\s*(?:dx|diagnosis|diagnoses))?|(?:active|discharge|working)\s*(?:dx|diagnosis|diagnoses))|(problem\s*list|active\s*problems?|past\s*medical\s*history|pmhx?|assessment\s*(?:and|&)\s*plan|diagnos(?:is|es)|dx(?:\s*list)?|icd-?10(?:-?cm)?(?:\s*codes?)?))\s*[:\-–]?\s*(.*)$/i;
-
-  const END_SECTION_RE = /^(?:patient(?:\s*name)?|resident\s*name|date\s*of\s*birth|dob|mrn|medical\s*record(?:\s*number)?|referr(?:ing|al)\s*(?:hospital|facility|source|date|physician)|hospital|attending(?:\s*physician)?|physician|insurance|payer|plan(?:\s*name)?|policy(?:\s*(?:number|\/\s*mbi)?)?|medications?|current\s*meds|meds(?:\s*list)?|allergies|labs?|lab\s*results|vitals?|vital\s*signs|care\s*needs|weight-?bearing|isolation|notes?|proposed\s*discharge(?:\s*date)?|expected\s*admit(?:\s*date)?|admit(?:\s*date)?|date\s*received|date\s*of\s*referral|code\s*status|diet|activity|social\s*history|family(?:\s*contact)?|advance\s*directive|dme|procedures?|imaging|consults?|weight|height|bmi|oxygen\s*sat|precautions|code\s*status|nursing\s*orders)\s*[:\-–]/i;
-
-  const TABLE_HEADER_RE = /^(?=.*\b(?:icd-?10(?:-?cm)?|code|dx\s*code|diag(?:nosis)?\s*code)\b)(?=.*\b(?:description|diagnosis|diagnoses|dx|title)\b).{0,80}$/i;
-
-  const MODIFIER_START_RE = /^(s\/p|status\s+post|w\/o|without|due\s+to|secondary\s+to|vs\.?|subsequent\s+encounter|initial\s+encounter|sequela)\b/i;
+  const LEFT_CONTEXT_RE = /(?:room|rm\.?|apt\.?|suite|unit|bldg\.?|building|wing|bed|phone|tel\.?|fax|zip|postal|npi|dea|mrn|acct\.?|account|lot|batch|box|interstate|highway|hwy|route|vitamin|hba1c|hemoglobin|dose|injection|vaccine|policy|mbi|member\s*(?:id|#)?|group|grp|plan|id|#|subscriber(?:\s*id)?)\s*[:#.\-–]?\s*$/i;
 
   const SKIP_UNCODED_RE = /^(none|n\/?a|nil|see\s+(?:below|above|note|notes|list)|not\s+listed|unknown|—|-|\.|\*+)$/i;
 
@@ -60,43 +58,35 @@
     return "";
   }
 
-  function normalizeDob(raw) {
+  // "MT MEDICAID  Plan: MEDICAID MT  Group: 88120" -> "MT MEDICAID".
+  // Cuts a label's value at the next "Label:" on the same line and trims OCR
+  // debris like a trailing " :" or " .".
+  function cutAtNextLabel(v) {
+    let t = String(v || "");
+    const m = t.match(/\s+(?:Plan|Group|Grp|Policy|Subscriber|Member|Phone|Fax|Sex|Age|DOB|MRN|Room|Bed|Unit|Isolation|Attending|Relation(?:ship)?|Category|Reaction|Severity|Guarantor|Payer|Secondary|Primary|ID|NPI|Address|Contact|Encounter|Admit|Admission|Physician|Provider)(?:\s+(?:ID|#|No\.?|Number|Name|Payer|Date|Type))?\s*#?\s*:(?:\s|$)/i);
+    if (m && m.index > 0) t = t.slice(0, m.index);
+    return t.replace(/\s{2,}.*$/, "").replace(/[\s:;.,=|]+$/, "").replace(/^[\s:;.,=|]+/, "").trim();
+  }
+
+  function normalizeDob(raw, { minYear = 1900, maxYear = 2100 } = {}) {
     if (!raw) return "";
     const m = String(raw).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if (!m) return "";
     let [, mm, dd, yy] = m;
+    if (yy.length === 3) return "";
     if (yy.length === 2) yy = Number(yy) > 30 ? `19${yy}` : `20${yy}`;
+    const y = Number(yy), mo = Number(mm), d = Number(dd);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < minYear || y > maxYear) return "";
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCMonth() !== mo - 1) return "";
     return `${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
-  }
-
-  function pickPlan(text) {
-    return pick(text, [
-      /Insurance\s*[:\-]\s*([^\n]+)/i,
-      /Payer\s*[:\-]\s*([^\n]+)/i,
-      /Plan\s*[:\-]\s*([^\n]+)/i,
-    ]);
-  }
-
-  function guessPayer(text) {
-    const t = text.toLowerCase();
-    const hasMed = /medicare/.test(t);
-    const hasCaid = /medicaid|medi-cal|medi cal/.test(t);
-    if (hasMed && hasCaid) return { payer: "medicare-medicaid", notes: pickPlan(text) };
-    if (/medicare\s+advantage|\b(mco|hmo|ppo)\b/.test(t) && hasMed) return { payer: "mco", notes: pickPlan(text) };
-    if (hasMed) return { payer: "medicare", notes: pickPlan(text) };
-    if (hasCaid) return { payer: "medicaid", notes: pickPlan(text) };
-    if (/private pay|self[- ]pay/.test(t)) return { payer: "private-pay", notes: pickPlan(text) };
-    if (/insurance|payer|aetna|blue cross|united|cigna|humana/.test(t)) return { payer: "private", notes: pickPlan(text) };
-    return { payer: "", notes: pickPlan(text) };
   }
 
   function normalizeIcd10Code(raw) {
     if (!raw) return "";
     let up = String(raw).toUpperCase().replace(/\s+/g, "");
     up = up.replace(/^([A-Z][0-9][0-9A-Z])\.(.+)$/, "$1$2");
-    if (!ICD_CODE_EXACT_RE.test(up) && !/^[A-Z][0-9][0-9A-Z][0-9A-Z]{1,4}$/.test(up)) {
-      if (!/^[A-Z][0-9][0-9A-Z]$/.test(up)) return "";
-    }
+    if (!/^[A-Z][0-9][0-9A-Z](?:[0-9A-Z]{1,4})?$/.test(up)) return "";
     if (up.length > 3) return `${up.slice(0, 3)}.${up.slice(3)}`;
     return up;
   }
@@ -109,296 +99,465 @@
     return String(code || "").toUpperCase().replace(/\./g, "");
   }
 
-  function cleanDescription(s) {
-    let t = String(s || "");
-    t = t.replace(/[([{\]‘’]/g, " ").replace(/[)\]}']/g, " ");
-    t = t.replace(ICD_CODE_RE, " ");
-    t = t.replace(/^(?:primary|principal|admitting|secondary|other|additional|active|discharge)\s*(?:dx|diagnosis|diagnoses)?\s*[:\-–]\s*/i, "");
-    t = t.replace(/^(?:icd-?10(?:-?cm)?|code|dx)\s*[:\-–#]?\s*/i, "");
-    t = t.replace(/^[\s.,;:\/|*\-–—]+|[\s.,;:\/|*\-–—]+$/g, "");
-    t = t.replace(/\s+/g, " ").trim();
-    t = t.replace(/[,;.\s]+$/, "");
-    if (t.length > 400) t = t.slice(0, 400).trim();
-    return t;
-  }
-
   function stripListMarker(line) {
-    return String(line || "").replace(/^\s*(?:[\u2022•●○▪\-–—*]|[0-9]+[.)]|[A-Za-z][.)])\s+/, "").trim();
+    return String(line || "").replace(/^\s*(?:[\u2022•●○▪◦\-–—*#>]+|[0-9]{1,2}[.)]|[A-Za-z][.)])\s*/, "").trim();
   }
 
-  function looksLikeMedication(line) {
-    const t = stripListMarker(line);
-    if (ICD_CODE_RE.test(t)) {
-      ICD_CODE_RE.lastIndex = 0;
-      return false;
+  // ---------------------------------------------------------------------------
+  // Section detection
+
+  const DX_SECTION_RE = /^(?:(?:hospital|active|current|chronic|master|patient)\s+)?problem\s*list(?:\s*\/\s*diagnos[ie]s)?|^(?:active|principal|current|chronic)\s+problems?|^principal\s+problem|^(?:(primary|principal|admitting|admission|reason\s+for\s+admission)|secondary|other|additional|discharge|final|working|active|hospital|clinical|encounter|referral)\s*(?:dx|diagnos[ie]s)|^(primary|principal|admitting)(?=\s*:)|^(?:secondary|other|additional|comorbid(?:ities)?)(?=\s*:)|^diagnos[ie]s(?:\s*\/\s*problems?)?(?:\s+(?:information|info|list|summary))?|^dx(?:\s*list)?(?=\s*[:\-–]|\s*$)|^assessment(?:\s*(?:and|&|\/)\s*plan)?|^impression(?:\s*(?:and|&|\/)\s*plan)?|^a\s*\/\s*p\b|^icd-?10(?:-?cm)?\s*(?:codes?|diagnos[ie]s)/i;
+  const PMH_SECTION_RE = /^(?:past\s+medical\s+history|medical\s+history|past\s+history|pmhx?|comorbidit(?:y|ies)|chronic\s+conditions|resolved\s+problems?)\b/i;
+  const ALLERGY_SECTION_RE = /^(?:(drug|medication|food|environmental|latex|known)\s+)?(?:allerg(?:y|ies|ens?)|intolerances?)(?:\s*\/\s*(?:intolerances?|adverse\s+(?:reactions?|drug\s+reactions?)))?(?:\s+(?:list|information|info|reviewed|verified))?(?:\s+as\s+of\s+[0-9\/\-]+(?:\s+[0-9:]+\s*(?:AM|PM)?)?)?(?:\s*\([^)]*\))?(?=\s*[:\-–]|\s*$)|^(environmental|latex)(?=\s*[:\-–])|^adverse\s+(?:drug\s+)?reactions?(?=\s*[:\-–]|\s*$)/i;
+
+  // Everything else that starts a new block. Colon optional (Epic prints
+  // most headers alone on a line).
+  const OTHER_SECTIONS = [
+    ["surgical", /^(?:past\s+)?surgical\s+history|^psh(?:x)?\b|^procedures?(?:\s+history)?|^operations?\b|^surgeries\b/i],
+    ["meds", /^(?:current|home|active|discharge|inpatient|scheduled|prn|outpatient)?\s*(?:medications?|meds)(?:\s+(?:prior\s+to\s+admission|list|on\s+admission|at\s+discharge))?|^prior\s+to\s+admission\s+medications|^mar\b|^medication\s+(?:administration|reconciliation)/i],
+    ["contacts", /^(?:emergency\s+|patient\s+)?contacts?(?:\s+information)?|^next\s+of\s+kin|^nok\b|^family\s+contacts?|^responsible\s+party|^poa\b|^health\s*care\s+proxy/i],
+    ["insurance", /^(?:primary\s+|secondary\s+)?(?:insurance|coverage|payers?|payor)(?:\s+information)?|^subscriber(?:\s+information)?|^guarantor(?:\s+information)?|^financial\s+class|^benefits?\b|^authorization\b/i],
+    ["providers", /^care\s+team|^providers?\b|^treatment\s+team|^attending\s+(?:provider|physician)|^consultants?\b|^pcp\b|^primary\s+care/i],
+    ["encounter", /^encounter(?:\s+information|\s+details)?|^admission\s+information|^face\s*sheet|^patient\s+(?:face\s*sheet|information|demographics)|^demographics|^visit\s+information|^registration/i],
+    ["isolation", /^isolation|^infection\s+(?:status|control|prevention)|^precautions/i],
+    ["history", /^family\s+history|^social\s+history|^fhx?\b|^shx?\b|^tobacco|^substance\s+use|^immunizations?|^vaccines?|^functional\s+status|^advance\s+directives?|^code\s+status|^diet\b|^activity\b|^nutrition\b/i],
+    ["clinical", /^history\s+of\s+present\s+illness|^hpi\b|^chief\s+complaint|^cc\b|^review\s+of\s+systems|^ros\b|^physical\s+exam(?:ination)?|^exam\b|^vitals?|^vital\s+signs|^labs?\b|^lab(?:oratory)?\s+results|^results\b|^imaging|^radiology|^micro(?:biology)?\b|^cultures?\b|^ekg|^ecg|^hospital\s+course|^brief\s+hospital\s+course|^plan\s+of\s+care|^discharge\s+(?:instructions|plan|summary|condition|disposition)|^disposition|^history\s+and\s+physical|^h\s*&\s*p\b|^progress\s+notes?|^consult(?:ation)?\s+notes?|^nursing\s+(?:notes?|assessment)|^therapy\s+notes?|^pt\s+notes?|^ot\s+notes?|^care\s+needs|^skilled\s+needs|^notes?\b|^weight[- ]bearing|^dme\b|^oxygen\b|^lines?\s*(?:\/\s*drains)?\b/i],
+    ["demographic", /^patient(?:\s+name)?\b|^resident(?:\s+name)?\b|^date\s+of\s+birth|^dob\b|^mrn\b|^medical\s+record|^referr(?:ing|al)\s+(?:hospital|facility|source|date|physician)|^hospital\b|^physician\b|^plan(?:\s*name)?\s*[:\-]|^policy|^date\s+received|^date\s+of\s+referral|^proposed\s+discharge|^expected\s+admit|^admit(?:\s*date)?\b|^room\b|^bed\b|^unit\b/i],
+  ];
+
+  const HEADER_NOISE_RE = /^[\s*•#>\-–—=_]+|[\s*•#>\-–—=_]+$/g;
+
+  // Words that end a short title-like line (generic header fallback).
+  const GENERIC_HEADER_TAIL_RE = /\b(?:history|list|information|info|summary|plan|notes?|medications?|exam|results|orders|contacts?|insurance|coverage|problems?|instructions|status|team|course|assessment|reconciliation|directives?)\s*:?\s*$/i;
+
+  function headerParts(line, re) {
+    const t = String(line || "").replace(HEADER_NOISE_RE, "").trim();
+    const m = t.match(re);
+    if (!m || m.index !== 0) return null;
+    const after = t.slice(m[0].length);
+    const sep = after.match(/^\s*[:\-–]\s*/);
+    if (!sep && after.trim()) return null; // "Allergies were reviewed" is prose, not a header
+    return { match: m, remainder: (sep ? after.slice(sep[0].length) : "").trim() };
+  }
+
+  function detectHeader(line) {
+    const raw = String(line || "").trim();
+    if (!raw) return null;
+    let hp = headerParts(raw, ALLERGY_SECTION_RE);
+    if (hp) {
+      const label = hp.match[0];
+      let remainder = hp.remainder;
+      if (/^as\s+of\b/i.test(remainder)) remainder = "";
+      return { section: "allergy", label, remainder, typeHint: allergyTypeFromHeader(label) };
     }
-    return /\b\d+(?:\.\d+)?\s*(mg|mcg|µg|mcg|g|ml|meq|units?|iu)\b|\b(?:tab(?:let)?s?|caps?|susp(?:ension)?)\b|\b(?:BID|TID|QID|PRN|q\d+\s*h)\b/i.test(t);
-  }
-
-  function looksLikeUncodedDiagnosis(line) {
-    const t = stripListMarker(line);
-    if (!t || SKIP_UNCODED_RE.test(t)) return false;
-    if (looksLikeMedication(t)) return false;
-    if (isTableHeader(t) || matchDxHeader(t) || isEndSection(t)) return false;
-    if (t.length < 3) return false;
-    if (!/[A-Za-z]{3,}/.test(t)) return false;
-    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(t)) return false;
-    if (/^(yes|no|unknown|none listed)$/i.test(t)) return false;
-    return true;
-  }
-
-  function matchDxHeader(line) {
-    const t = String(line || "").trim();
-    const m = t.match(DX_HEADER_RE);
-    if (!m) return null;
-    // Avoid treating a bare capitalized word mid-sentence as a header unless it is
-    // a label (has a colon/dash or is a known phrase). "Diagnosis" as a table cell
-    // with no colon still counts because of the regex.
-    const isPrimary = !!(m[1] && /^(?:primary|principal|admitting)\b/i.test(m[1]));
-    const remainder = (m[4] || "").trim();
-    return { isPrimary, remainder, raw: m[0] };
-  }
-
-  function isEndSection(line) {
-    const t = String(line || "").trim();
-    if (matchDxHeader(t) || isTableHeader(t)) return false;
-    return END_SECTION_RE.test(t);
-  }
-
-  function isTableHeader(line) {
-    const t = String(line || "").replace(/[|+\-_/]/g, " ").replace(/\s+/g, " ").trim();
-    if (!TABLE_HEADER_RE.test(t)) return false;
-    return t.split(" ").length <= 12;
-  }
-
-  function shouldRejectCode(raw, line, indexInLine) {
-    const normalized = normalizeIcd10Code(raw);
-    const compact = compactKey(normalized);
-    if (!normalized) return true;
-    if (FALSE_POSITIVE_CODES.has(compact) || FALSE_POSITIVE_CODES.has(normalized)) return true;
-    if (FREQ_CODE_RE.test(compact)) return true;
-    const before = String(line || "").slice(0, indexInLine);
-    if (LEFT_CONTEXT_RE.test(before)) return true;
-    const around = String(line || "");
-    if (/\b(vitamin|hba1c|hemoglobin\s*a1c|a1c)\b/i.test(around) && (compact === "B12" || compact === "A1C")) return true;
-    if (/\b(q\s*\d+\s*h|every\s+\d+\s+hours?)\b/i.test(around) && FREQ_CODE_RE.test(compact)) return true;
-    return false;
-  }
-
-  function hasDxKeyword(text) {
-    return /\b(diagnos(?:is|es)|dx|icd-?10|problem\s*list|active\s*problems?|pmhx?|comorbid|medical\s*history|principal|admitting)\b/i.test(text || "");
-  }
-
-  function findCodesInLine(line) {
-    const found = [];
-    const re = new RegExp(ICD_CODE_RE.source, "gi");
-    let m;
-    while ((m = re.exec(line))) {
-      const raw = m[1];
-      if (shouldRejectCode(raw, line, m.index)) continue;
-      const code = normalizeIcd10Code(raw);
-      if (!code) continue;
-      found.push({ raw, code, index: m.index, end: m.index + m[0].length, dotted: /\./.test(raw) || raw.length > 3 });
+    hp = headerParts(raw, PMH_SECTION_RE);
+    if (hp) return { section: "pmh", label: hp.match[0], remainder: hp.remainder, isPrimary: false };
+    hp = headerParts(raw, DX_SECTION_RE);
+    if (hp) {
+      const label = hp.match[0];
+      const isPrimary = /^(?:primary|principal|admitting|admission|reason\s+for\s+admission)\b/i.test(label) && !/problems?\s*$/i.test(label) || /^principal\s+problem/i.test(label);
+      const section = /^(?:assessment|impression|a\s*\/\s*p)/i.test(label) ? "assessment" : "dx";
+      return { section, label, remainder: hp.remainder, isPrimary };
     }
-    return found;
-  }
-
-  function descriptionForCode(line, match, allMatches) {
-    // Prefer text on the same line with this code removed (and other codes too).
-    let rest = line;
-    // Remove from the end so earlier indices stay valid if we sliced, but here we
-    // just wipe all code tokens and leftover punctuation.
-    const sorted = allMatches.slice().sort((a, b) => b.index - a.index);
-    for (const c of sorted) {
-      rest = rest.slice(0, c.index) + " " + rest.slice(c.end);
+    // Diagnosis table header row, e.g. "Dx   ICD-10" or "Code  Description".
+    const flat = raw.replace(/[|+_\/.:;,]/g, " ").replace(/\s+/g, " ").trim();
+    if (/^(?:(?:dx|diagnosis|diagnoses|description|icd-?10(?:-?cm)?|code|codes|dx\s+code|rank|classification|date|onset|poa|type|status)\s*)+$/i.test(flat) && flat.split(" ").length >= 2 && /\b(?:dx|diagnos|icd|code)/i.test(flat) && /\b(?:dx|diagnos|icd|description)/i.test(flat)) {
+      return { section: "dx", label: flat, remainder: "", isPrimary: false, table: true };
     }
-    return cleanDescription(rest);
-  }
-
-  function splitUncodedList(text, { allowComma }) {
-    const t = stripListMarker(text);
-    if (!t) return [];
-    const semi = t.split(/\s*;\s*/).map((s) => s.trim()).filter(Boolean);
-    if (semi.length > 1) return semi.map(cleanDescription).filter(Boolean);
-    if (!allowComma) return [cleanDescription(t)].filter(Boolean);
-    const parts = t.split(/\s*,\s*/).map((s) => s.trim()).filter(Boolean);
-    if (parts.length < 2) return [cleanDescription(t)].filter(Boolean);
-    if (parts.slice(1).some((p) => MODIFIER_START_RE.test(p))) {
-      return [cleanDescription(t)].filter(Boolean);
+    for (const [section, re] of OTHER_SECTIONS) {
+      hp = headerParts(raw, re);
+      if (hp) return { section, label: hp.match[0], remainder: hp.remainder };
     }
-    return parts.map(cleanDescription).filter((p) => p && p.length >= 3);
-  }
-
-  function pushItem(items, { code, description, primary }) {
-    const desc = cleanDescription(description || "");
-    const normalized = code ? normalizeIcd10Code(code) : "";
-    if (!normalized && !desc) return;
-    items.push({
-      code: normalized,
-      description: desc,
-      primary: !!primary,
-    });
-  }
-
-  function addCodedLine(items, line, { primary, inSection, nextLine, consumeNext }) {
-    const matches = findCodesInLine(line);
-    if (!matches.length) return 0;
-    let usedNext = 0;
-    const lineHasKeyword = hasDxKeyword(line);
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      let description = descriptionForCode(line, match, matches);
-      if (!description && matches.length === 1 && nextLine) {
-        const next = stripListMarker(nextLine);
-        if (next && !findCodesInLine(next).length && looksLikeUncodedDiagnosis(next) && !isEndSection(next) && !matchDxHeader(next)) {
-          description = cleanDescription(next);
-          usedNext = 1;
-        }
-      }
-      const accept = inSection || lineHasKeyword || !!description || match.dotted;
-      if (!accept) continue;
-      pushItem(items, { code: match.code, description, primary: primary && i === 0 && items.every((d) => !d.primary) });
+    // Generic: short title-ish line with no digits ending in a header word,
+    // e.g. "SURGICAL HISTORY", "Hospital Course".
+    const t = raw.replace(HEADER_NOISE_RE, "").trim();
+    if (t.length <= 48 && !/\d/.test(t) && t.split(/\s+/).length <= 5 && GENERIC_HEADER_TAIL_RE.test(t)) {
+      return { section: "other", label: t, remainder: "" };
     }
-    if (consumeNext) return usedNext;
-    return 0;
+    return null;
   }
 
-  function extractDiagnoses(text) {
-    if (!text) return [];
-    const lines = String(text).replace(/\r\n/g, "\n").split("\n");
-    const items = [];
-    let inDxSection = false;
-    let sectionPrimary = false;
-    let primaryAssigned = false;
+  // Lines that are never clinical content regardless of section.
+  const NON_CLINICAL_LINE_RE = /\b(?:printed\s+(?:by|on)|page\s+\d+\s+of\s+\d+|attending|provider|physician|pcp|isolation|iso\s*:|subscriber|guarantor|payer|payor|insurance|medicaid|medicare|member\s*(?:id|#)|policy|group\s*(?:#|no|number|:)|relation(?:ship)?|mobile|cell\s*(?:phone|#|:)|home\s+work|phone|encounter\s*(?:date|#|no\.?|number|id|type|information|:)|mrn|dob|date\s+of\s+birth|admit\s+date|fax|npi|address|reviewed\s+(?:on|by)|signed\s+by|electronically\s+signed|e-signed|dictated|transcribed|csn|fin\b|acct|account|sex\s*:|age\s*:)\b/i;
+  const TIME_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/i;
+  const PHONE_RE = /\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b|\b\d{3}[\s.\-]\d{4}\b/;
 
-    const markPrimary = (force) => {
-      if (force && !primaryAssigned) {
-        primaryAssigned = true;
-        return true;
-      }
-      return false;
-    };
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      if (!trimmed) continue;
-
-      if (isTableHeader(trimmed)) {
-        inDxSection = true;
-        sectionPrimary = false;
-        continue;
-      }
-
-      const header = matchDxHeader(trimmed);
-      if (header) {
-        inDxSection = true;
-        sectionPrimary = header.isPrimary;
-        if (header.remainder) {
-          const remainder = header.remainder;
-          const codes = findCodesInLine(remainder);
-          if (codes.length) {
-            const skip = addCodedLine(items, remainder, {
-              primary: markPrimary(header.isPrimary),
-              inSection: true,
-              nextLine: lines[i + 1],
-            });
-            if (skip) i += skip;
-          } else if (looksLikeUncodedDiagnosis(remainder) || remainder.length >= 3) {
-            const parts = splitUncodedList(remainder, { allowComma: !header.isPrimary });
-            for (const part of parts) {
-              const isPri = markPrimary(header.isPrimary && parts.indexOf(part) === 0);
-              pushItem(items, { code: "", description: part, primary: isPri });
-            }
-          }
-        }
-        continue;
-      }
-
-      if (inDxSection && isEndSection(trimmed)) {
-        inDxSection = false;
-        sectionPrimary = false;
-        continue;
-      }
-
-      const codes = findCodesInLine(trimmed);
-      if (codes.length) {
-        const wantPrimary = sectionPrimary && inDxSection && !primaryAssigned;
-        const skip = addCodedLine(items, trimmed, {
-          primary: markPrimary(wantPrimary),
-          inSection: inDxSection,
-          nextLine: lines[i + 1],
-        });
-        if (skip) i += skip;
-        continue;
-      }
-
-      if (inDxSection && looksLikeUncodedDiagnosis(trimmed)) {
-        // If the previous added item was a code with no description and this
-        // line is a lone description, prefer attaching it (already handled by
-        // look-ahead). Reaching here means it is its own uncoded diagnosis.
-        const parts = splitUncodedList(trimmed, { allowComma: !sectionPrimary });
-        for (const part of parts) {
-          const isPri = markPrimary(sectionPrimary && !primaryAssigned);
-          pushItem(items, { code: "", description: part, primary: isPri });
-        }
-      }
-    }
-
-    return dedupeDiagnoses(items);
+  function isNonClinicalLine(line) {
+    const t = String(line || "");
+    return NON_CLINICAL_LINE_RE.test(t) || TIME_RE.test(t) || PHONE_RE.test(t);
   }
 
-  function dedupeDiagnoses(items) {
+  const BLOCKED_SECTIONS = new Set(["contacts", "insurance", "providers", "encounter", "isolation", "demographic"]);
+
+  function segment(text) {
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
     const out = [];
-    const codeSeen = new Set();
-    const descSeen = new Set();
-    for (const item of items) {
-      if (item.code) {
-        const key = compactKey(item.code);
-        if (codeSeen.has(key)) {
-          const prev = out.find((d) => compactKey(d.code) === key);
-          if (prev && !prev.description && item.description) prev.description = item.description;
-          if (prev && item.primary) prev.primary = true;
-          continue;
-        }
-        codeSeen.add(key);
-        out.push({ code: item.code, description: item.description || "", primary: !!item.primary });
-        if (item.description) descSeen.add(item.description.toLowerCase());
+    let section = "none";
+    let meta = {};
+    for (const rawLine of lines) {
+      // Normalize tabs and strip scanner/OCR debris at line ends (" .", " :", " |", "_").
+      const line = rawLine.replace(/\t/g, "  ").replace(/(?:\s+[.:;,|<>‘’'"_=~])+\s*$/, "").replace(/^[\s._=~|‘’'"]+(?=\S)/, "").replace(/\s+$/, "");
+      const trimmed = line.trim();
+      if (!trimmed) {
+        out.push({ line: "", section, meta, blank: true });
         continue;
       }
-      const dk = (item.description || "").toLowerCase();
-      if (!dk || descSeen.has(dk)) continue;
-      descSeen.add(dk);
-      out.push({ code: "", description: item.description, primary: !!item.primary });
-    }
-    const primaryCount = out.filter((d) => d.primary).length;
-    if (primaryCount > 1) {
-      let kept = false;
-      for (const d of out) {
-        if (d.primary && kept) d.primary = false;
-        else if (d.primary) kept = true;
+      const header = detectHeader(trimmed);
+      if (header) {
+        section = header.section;
+        meta = header;
+        out.push({ line: trimmed, section, meta, header });
+        continue;
       }
+      out.push({ line: trimmed, section, meta });
     }
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // Diagnoses
 
-  const ALLERGY_HEADER_RE = /^(allergy\s+(?:list|intolerance|information)|allerg(?:y|ies)\s*\/\s*intolerances?|(?:drug|food|environmental|latex|known)\s+allerg(?:y|ies)|intolerances?|allerg(?:y|ies)|latex(?:\s+allerg(?:y|ies))?|environmental)\s*[:\-–]?\s*(.*)$/i;
+  const DX_TABLE_HEADER_RE = /^(?:diagnosis|problem|description|dx|code|rank|classification|type|icd-?10(?:-?cm)?|date(?:\s+(?:noted|resolved|of\s+onset))?|noted|onset|resolved|poa|priority|class|status|hospital|overview|comments?|laterality|chronic|principal|source|\s|\/|-)+$/i;
+  const PLAN_LINE_RE = /^(?:continue|cont\.?|start(?:ed)?|begin|monitor|check|obtain|consult|f\/u|follow(?:\s*-?\s*up)?|order(?:ed)?|give|hold|resume|discontinue|d\/c|dc\b|consider|plan|will\b|recommend|appreciate|pt\b|ot\b|pt\/ot|eval(?:uate)?|wound\s+care|elevate|blood\s+cultures?|cultures?|labs?\b|repeat|trend|titrate|admit|discharge|dispo(?:sition)?|encourage|educate|npo|diet|activity|pain\s+control|dvt\s+ppx|ppx|prophylaxis|code\s+status|full\s+code|dnr|iv\b|po\b|abx|antibiotics?|transfuse|wean|keep|maintain|replete|goal|target|serial|daily|bmp|cbc|cmp|xr|x-ray|ct\b|mri|us\b|ultrasound|echo|tte|ekg|ecg|s\/p\s+\d)/i;
+  const MED_LINE_RE = /\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg|g|ml|meq|units?|iu|%)\b|\b(?:tab(?:let)?s?|caps?(?:ule)?s?|susp(?:ension)?|inhaler|patch|by\s+mouth|daily|nightly|bid|tid|qid|prn|q\s*\d+\s*h)\b/i;
+  const NOT_A_DX_RE = /^(?:yes|no|none(?:\s+listed)?|unknown|n\/a|na|date|noted|poa|other|see\s+.*|normal|negative|positive|stable|improving|resolved|active|chronic|hcc|cms\/hcc)$/i;
 
-  const ALLERGY_TABLE_RE = /^(?=.*\b(allergen|allerg(?:y|ies)|substance|drug|agent)\b)(?=.*\b(reaction|severity|intolerance|type|comment|response)\b).{0,100}$/i;
+  function cleanDxText(s) {
+    let t = stripListMarker(String(s || ""));
+    t = t.replace(/^\(?\s*(?:principal|primary|admitting)\s*(?:problem|dx|diagnosis)?\s*\)?\s*[:\-–]?\s*/i, "");
+    t = t.replace(/^(?:active|chronic|resolved)\s+problems?\s*[:\-–]\s*/i, "");
+    t = t.replace(/\(\s*(?:cms\s*\/\s*)?hcc\s*\)|\bcms\s*\/\s*hcc\b|\(\s*poa\s*\)/gi, " ");
+    t = t.replace(/\[[^\]]*\]/g, " ");
+    t = t.replace(/\(\s*\)/g, " ");
+    t = t.replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, " ");
+    t = t.replace(/\b(?:POA\s*[:\-]?\s*)?(?:Yes|No|Y|N|W|U|Exempt)\s*$/i, " ");
+    t = t.replace(/\s+/g, " ").trim();
+    // Drop OCR debris ("Anxiety 5 --e NT" -> "Anxiety"): cut at the first
+    // token that mixes punctuation runs with 0–2 letters, then drop a stray
+    // trailing number unless it belongs to the term ("stage 3", "type 2").
+    const words = t.split(" ");
+    const debrisAt = words.findIndex((w, i) => i > 0 && /^(?:[^A-Za-z0-9\s]{2,}[A-Za-z]{0,2}|[A-Za-z]{0,2}[^A-Za-z0-9\s(),\/]{2,})$/.test(w));
+    if (debrisAt > 0 && /[A-Za-z]{3,}/.test(words.slice(0, debrisAt).join(" "))) t = words.slice(0, debrisAt).join(" ");
+    let prev;
+    do {
+      prev = t;
+      const m = t.match(/\s+(\S+)$/);
+      if (!m) break;
+      const last = m[1];
+      const before = t.slice(0, m.index);
+      const keepNumber = /\b(?:stage|type|grade|class|level|phase|degree|part|zone|t|l|c|s|cervical|thoracic|lumbar|nyha|gold|ckd)\s*$/i.test(before);
+      if (/^[^A-Za-z0-9]+$/.test(last) || (/^\d{1,2}$/.test(last) && !keepNumber)) t = before.trim();
+    } while (t !== prev && t.length);
+    t = t.replace(/^[\s.,;:\/|*\-–—]+|[\s.,;:\/|*\-–—(]+$/g, "").trim();
+    if (t.length > 160) t = t.slice(0, 160).trim();
+    return t;
+  }
 
-  const NKDA_RE = /^(?:nka|nkda|nkfa|nkaa|no\s+known\s+(?:drug\s+|food\s+|environmental\s+)?allerg(?:y|ies)|denies\s+(?:any\s+)?(?:known\s+)?allerg(?:y|ies)|no\s+allerg(?:y|ies)\s+(?:reported|listed|identified|noted)|none\s+known|none(?:\s+reported)?)$/i;
+  function looksLikeFreeTextDx(t, section) {
+    if (!t || t.length < 3) return false;
+    if (SKIP_UNCODED_RE.test(t) || NOT_A_DX_RE.test(t)) return false;
+    if (!/[A-Za-z]{3,}/.test(t)) return false;
+    if (DX_TABLE_HEADER_RE.test(t.replace(/[.:;,]/g, " ").replace(/(?:^|\s)[A-Za-z0-9](?=\s|$)/g, " ").replace(/\s+/g, " ").trim())) return false;
+    if (MED_LINE_RE.test(t)) return false;
+    if (PLAN_LINE_RE.test(t)) return false;
+    if (isNonClinicalLine(t)) return false;
+    if (isNkdaText(t)) return false;
+    if (detectHeader(t)) return false;
+    if (/\bicd-?10\b|\breviewed\b|\bsee\s+(?:above|below)\b/i.test(t)) return false;
+    const words = t.split(/\s+/);
+    if (words.length > (section === "assessment" ? 8 : 12) || t.length > 110) return false;
+    if (/[.!?]\s+[A-Za-z]/.test(t)) return false; // prose sentence
+    if (/\b(?:is|was|were|are|has|had|presents?|presented|reports?|denies|states?|patient|pt)\b/i.test(t) && words.length > 4) return false;
+    if (/^[A-Z][a-z]+,\s*[A-Z][a-z]+(?:\s+[A-Z]\.?)?$/.test(t)) return false; // "Lastname, First"
+    return true;
+  }
 
-  const SEVERITY_WORD_RE = /\b(mild|moderate|severe|life[- ]threatening|anaphylaxis|anaphylactic)\b/i;
+  const MODIFIER_START_RE = /^(?:s\/p|status\s+post|w\/o|with|without|due\s+to|secondary\s+to|vs\.?|subsequent|initial|sequela|stage|unspecified|type|left|right|bilateral|acute|chronic|not\s|in\s|of\s|on\s|requiring|complicated|uncomplicated|nos\b|mild|moderate|severe)/i;
 
-  const DRUG_ALLERGEN_RE = /\b(pcn|penicillin|penicillins|amox(?:icillin)?|ampicillin|augmentin|sulfa|sulfonamides?|bactrim|tmp-smx|codeine|morphine|oxycodone|hydrocodone|dilaudid|hydromorphone|aspirin|asa|ibuprofen|nsaids?|naproxen|iodine|contrast|lisinopril|enalapril|ace\s*inhibitors?|vancomycin|cipro(?:floxacin)?|levaquin|levofloxacin|heparin|warfarin|coumadin|statins?|atorvastatin|lidocaine|latex-free|prednisone|dilantin|phenytoin|keppra|levetiracetam|tramadol|demerol|meperidine|clindamycin|keflex|cephalexin|cefazolin|ancef|erythromycin|azithromycin|tetracycline|doxycycline|flagyl|metronidazole)\b/i;
+  function splitFreeTextList(text, { allowComma }) {
+    const semi = text.split(/\s*;\s*/).map((s) => s.trim()).filter(Boolean);
+    if (semi.length > 1) return semi;
+    if (!allowComma) return [text];
+    const parts = text.split(/\s*,\s*/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length < 2) return [text];
+    if (parts.slice(1).some((p) => MODIFIER_START_RE.test(p) && p.split(/\s+/).length <= 3)) return [text];
+    if (parts.some((p) => p.split(/\s+/).length > 6)) return [text];
+    return parts;
+  }
 
-  const FOOD_ALLERGEN_RE = /\b(peanuts?|tree\s+nuts?|almonds?|walnuts?|cashews?|pecans?|shellfish|shrimp|crab|lobster|fish|milk|dairy|eggs?|wheat|gluten|soy|sesame|strawberr(?:y|ies)|chocolate)\b/i;
+  function findCodesInLine(line, { inDx }) {
+    const found = [];
+    const re = new RegExp(ICD_BODY, "gi");
+    let m;
+    while ((m = re.exec(line))) {
+      const raw = m[1];
+      const start = m.index;
+      const end = start + raw.length;
+      const prevCh = line.charAt(start - 1);
+      const nextCh = line.charAt(end);
+      // Word boundaries, and not glued to digits, colons, hyphens or slashes
+      // (times like 4:40, phone or ID fragments, "ICD-10").
+      if (/[A-Za-z0-9]/.test(prevCh) || /[A-Za-z0-9]/.test(nextCh)) continue;
+      if (/[:\-\/.]/.test(prevCh) && /\d/.test(line.charAt(start - 2))) continue;
+      if (nextCh === ":" || (nextCh === "-" && /\d/.test(line.charAt(end + 1)))) continue;
+      if (prevCh === "-" && /ICD$/i.test(line.slice(0, start - 1))) continue;
+      const before = line.slice(0, start);
+      const after = line.slice(end);
+      if (/\d[\s\-]*$/.test(before) && /^\s*\d/.test(after)) continue;
+      if (/\d{3}\s*$/.test(before) || /^\s*\d{3,4}\b/.test(after)) continue; // phone neighbours
+      if (LEFT_CONTEXT_RE.test(before)) continue;
+      const code = normalizeIcd10Code(raw);
+      if (!code) continue;
+      const compact = compactKey(code);
+      if (FALSE_POSITIVE_CODES.has(compact) || FREQ_CODE_RE.test(compact)) continue;
+      const dotted = raw.includes(".");
+      const bracketed = /[\[(]\s*$/.test(before) && /^\s*[\])]/.test(after);
+      if (!dotted && raw.length > 3 && !inDx) continue; // undotted long codes only in dx sections
+      found.push({ raw, code, index: start, end, dotted, bracketed });
+    }
+    return found;
+  }
 
-  const ENV_ALLERGEN_RE = /\b(pollen|dust(?:\s+mites?)?|mold|grass(?:es)?|ragweed|cat(?:s|\s+dander)?|dog(?:s|\s+dander)?|pet\s+dander|bees?|wasps?|hornets?|latex(?:\s+free)?)\b/i;
+  function lineWithoutCodes(line, matches) {
+    let rest = line;
+    for (const c of matches.slice().sort((a, b) => b.index - a.index)) {
+      rest = rest.slice(0, c.index) + " " + rest.slice(c.end);
+    }
+    return rest;
+  }
+
+  const DX_SYNONYMS = [
+    [/\b(?:htn|high\s*blood\s*pressure)\b/gi, "hypertension"],
+    [/\b(?:t2dm|dm\s*2|dm\s*ii|niddm)\b/gi, "type 2 diabetes mellitus"],
+    [/\bdiabetes\b(?!\s+mellitus)/gi, "diabetes mellitus"],
+    [/\bchf\b/gi, "heart failure"],
+    [/\bcopd\b/gi, "chronic obstructive pulmonary"],
+    [/\bckd\b/gi, "chronic kidney"],
+    [/\ba-?fib\b/gi, "atrial fibrillation"],
+    [/\blle\b/gi, "left lower limb"],
+    [/\brle\b/gi, "right lower limb"],
+    [/\blue\b/gi, "left upper limb"],
+    [/\brue\b/gi, "right upper limb"],
+    [/\bextremity\b/gi, "limb"],
+    [/\bhyperlipidemia|hld\b/gi, "hyperlipidemia"],
+    [/\buti\b/gi, "urinary tract infection"],
+  ];
+
+  function expandDx(s) {
+    let t = String(s || "");
+    for (const [re, to] of DX_SYNONYMS) t = t.replace(re, to);
+    return t;
+  }
+
+  function contentTokens(s) {
+    s = expandDx(s);
+    const STOP = new Set(["of", "the", "and", "or", "a", "an", "to", "in", "with", "without", "due", "for", "on", "by", "at", "as", "unspecified", "other", "type", "disorder", "disease", "nos"]);
+    return String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !STOP.has(w));
+  }
+
+  function coveredBy(freeText, codedItems) {
+    const toks = contentTokens(freeText);
+    if (!toks.length) return true;
+    for (const c of codedItems) {
+      const pool = new Set(contentTokens(`${c.description} ${c.sourceText || ""}`));
+      const hit = toks.filter((t) => pool.has(t)).length;
+      if (hit / toks.length >= 0.8) return true;
+    }
+    return false;
+  }
+
+  /**
+   * opts.lookup(code) -> { code, description, billable } | null
+   * When a lookup is supplied (the bundled CMS list), codes not in the list are
+   * dropped and the official description replaces the document text.
+   */
+  function extractDiagnoses(text, opts) {
+    if (!text) return [];
+    const lookup = opts && typeof opts.lookup === "function" ? opts.lookup : null;
+    const rows = segment(text);
+    const coded = [];
+    const free = [];
+    let primaryNext = false;
+    let sectionPrimaryPending = false;
+
+    const addCoded = (match, row, desc, primary) => {
+      let official = null;
+      if (lookup) {
+        official = lookup(match.code);
+        if (!official) return false;
+      }
+      coded.push({
+        code: official ? official.code : match.code,
+        description: official ? official.description : desc,
+        sourceText: desc,
+        primary: !!primary,
+        codeStatus: official ? (official.billable === false ? "nonbillable" : "valid") : "",
+        codeSource: "found",
+        verified: !!official,
+      });
+      return true;
+    };
+
+    // OCR often reads I→1, Z→2, S→5, B→8, O→0 in the first character and
+    // O→0 / I,l→1 later on ("[110]" for I10, "279.01" for Z79.01). Only used
+    // with the CMS list, and only when the official description matches the
+    // words on the line.
+    const ocrRepairs = (content) => {
+      if (!lookup) return [];
+      const out = [];
+      const re = /(^|[\s\[(])([0-9A-Za-z][0-9OoIl][0-9A-Za-z](?:\.[0-9A-Za-z]{1,4})?)(?=$|[\s\]),.;])/g;
+      let m;
+      while ((m = re.exec(content))) {
+        const tok = m[2];
+        if (normalizeIcd10Code(tok) && lookup(tok)) continue; // already a real code
+        const first = { "1": "I", "2": "Z", "5": "S", "8": "B", "0": "O", "l": "I" }[tok[0]] || tok[0].toUpperCase();
+        if (!/[A-Z]/.test(first)) continue;
+        const restFixed = tok.slice(1).replace(/[Oo]/g, "0").replace(/[Il]/g, "1");
+        const fixed = (first + restFixed).toUpperCase();
+        const code = normalizeIcd10Code(fixed);
+        if (!code) continue;
+        const official = lookup(code);
+        if (!official) continue;
+        const text = content.replace(tok, " ");
+        const lineToks = contentTokens(text);
+        const offToks = new Set(contentTokens(official.description));
+        if (!lineToks.length) continue;
+        const hit = lineToks.filter((t) => offToks.has(t)).length;
+        if (hit < 1 || hit / lineToks.length < 0.5) continue;
+        const start = m.index + m[1].length;
+        out.push({ raw: tok, code, index: start, end: start + tok.length, dotted: tok.includes("."), bracketed: true, repaired: true });
+      }
+      return out;
+    };
+
+    const handleContent = (content, row, opts2) => {
+      let isPrimaryLine = !!opts2.isPrimaryLine;
+      const section = row.section;
+      const inDx = section === "dx" || section === "pmh" || section === "assessment";
+      if (BLOCKED_SECTIONS.has(section)) return;
+      const lineNonClinical = isNonClinicalLine(content);
+      const matches = lineNonClinical ? [] : findCodesInLine(content, { inDx });
+      if (inDx && !lineNonClinical) {
+        const real = lookup ? matches.filter((mm) => lookup(mm.code)) : matches;
+        if (!real.length) {
+          const fixedCodes = ocrRepairs(content);
+          if (fixedCodes.length) { matches.length = 0; matches.push(...fixedCodes); }
+        }
+      }
+      if (inDx && matches.length === 1 && /\s(?:primary|principal)\b/i.test(" " + lineWithoutCodes(content, matches)) && /^[^A-Za-z0-9]*$/.test(content.slice(0, matches[0].index)) && !/primary\s+(?:care|physician|payer|insurance)/i.test(content)) isPrimaryLine = true;
+      const rest = cleanDxText(lineWithoutCodes(content, matches).replace(/\s{2,}(?:primary|principal|\d{1,2})\s{2,}.*$/i, " "));
+      let anyCoded = false;
+      for (const match of matches) {
+        if (!inDx && !(match.dotted || match.bracketed)) continue;
+        if (!inDx && !lookup) continue; // outside dx sections, only verified codes
+        const primary = (isPrimaryLine || sectionPrimaryPending) && !coded.some((c) => c.primary) && !free.some((f) => f.primary);
+        const desc = matches.length === 1 ? rest : "";
+        if (addCoded(match, row, desc, primary)) {
+          anyCoded = true;
+          if (primary) sectionPrimaryPending = false;
+        }
+      }
+      if (anyCoded || !inDx) return;
+      if (lineNonClinical) return;
+      if (section === "assessment" && /^\s*[-–•*]/.test(content)) return; // plan bullets
+      const parts = splitFreeTextList(rest, { allowComma: !isPrimaryLine });
+      for (const part of parts) {
+        const p = cleanDxText(part);
+        if (!looksLikeFreeTextDx(p, section)) continue;
+        const primary = (isPrimaryLine || sectionPrimaryPending) && !coded.some((c) => c.primary) && !free.some((f) => f.primary);
+        free.push({ code: "", description: p, primary, codeSource: "", codeStatus: "", fromSection: section });
+        if (primary) sectionPrimaryPending = false;
+      }
+    };
+
+    for (const row of rows) {
+      if (row.blank) continue;
+      if (row.header) {
+        const h = row.header;
+        sectionPrimaryPending = false;
+        if (h.section === "dx" || h.section === "pmh" || h.section === "assessment") {
+          if (h.isPrimary) sectionPrimaryPending = true;
+          if (h.remainder) handleContent(h.remainder, row, { isPrimaryLine: !!h.isPrimary });
+          if (h.isPrimary && h.remainder) sectionPrimaryPending = false;
+        }
+        continue;
+      }
+      handleContent(row.line, row, { isPrimaryLine: false });
+    }
+
+    // Dedupe coded by code; free text by text and against coded items.
+    const out = [];
+    const seen = new Map();
+    for (const c of coded) {
+      const key = compactKey(c.code);
+      if (seen.has(key)) {
+        const prev = seen.get(key);
+        if (c.primary) prev.primary = true;
+        if (!prev.description && c.description) prev.description = c.description;
+        continue;
+      }
+      seen.set(key, c);
+      out.push(c);
+    }
+    const freeSeen = new Set();
+    for (const f of free) {
+      const k = f.description.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (!k || freeSeen.has(k)) continue;
+      if (coveredBy(f.description, out.filter((d) => d.code))) {
+        if (f.primary) {
+          const match = out.find((d) => d.code && coveredBy(f.description, [d]));
+          if (match && !out.some((d) => d.primary)) match.primary = true;
+        }
+        continue;
+      }
+      freeSeen.add(k);
+      out.push(f);
+    }
+    // Primary first, exactly one primary at most.
+    let primaryKept = false;
+    for (const d of out) {
+      if (d.primary && !primaryKept) primaryKept = true;
+      else d.primary = false;
+    }
+    out.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
+    return out.map((d) => {
+      const item = { code: d.code || "", description: d.description || "", primary: !!d.primary };
+      if (d.sourceText && d.sourceText !== d.description) item.sourceText = d.sourceText;
+      if (d.codeStatus) item.codeStatus = d.codeStatus;
+      if (d.codeSource) item.codeSource = d.codeSource;
+      if (d.verified) item.verified = true;
+      return item;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Allergies
+
+  const NKDA_RE = /^(?:nka|nkda|nkfa|nkaa|no\s+known\s+(?:drug\s+|food\s+|environmental\s+|medication\s+)?allerg(?:y|ies)|no\s+known\s+(?:drug\s+)?allerg(?:y|ies)\s+(?:on\s+file|reported|documented)|patient\s+has\s+no\s+known\s+allerg(?:y|ies)|denies\s+(?:any\s+)?(?:known\s+)?allerg(?:y|ies)|no\s+allerg(?:y|ies)(?:\s+(?:reported|listed|identified|noted|on\s+file|documented))?|none\s+known|none(?:\s+reported)?|no\s+active\s+allerg(?:y|ies))$/i;
+
+  function isNkdaText(text) {
+    const t = cleanLine(String(text || "")).replace(/[.\s]+$/g, "").replace(/\s+/g, " ");
+    if (!t) return false;
+    if (NKDA_RE.test(t)) return true;
+    if (/^(nka|nkda|nkfa)\b/i.test(t) && !/\bexcept\b|\bbut\b/i.test(t)) return true;
+    return /\bno\s+known\s+(?:drug\s+|food\s+|medication\s+)?allerg(?:y|ies)\b/i.test(t) && !/\bexcept\b|\bbut\b/i.test(t);
+  }
+
+  const SEVERITY_WORD_RE = /\b(mild|moderate|severe|life[- ]threatening|anaphylaxis|anaphylactic(?:\s+shock)?)\b/i;
+  const REACTION_WORDS = "rash(?:es)?|hives|urticaria|itch(?:ing|y)?|pruritus|anaphyla(?:xis|ctic(?:\\s+shock)?)|swelling|angioedema|edema|nausea(?:\\s+(?:and|&)\\s+vomiting)?|vomiting|n\\/v|diarrh(?:ea|oea)|gi\\s+upset|upset\\s+stomach|stomach\\s+upset|abdominal\\s+pain|cramp(?:s|ing)?|shortness\\s+of\\s+breath|sob|dyspnea|wheez(?:ing|e)|difficulty\\s+breathing|trouble\\s+breathing|throat\\s+(?:swelling|closing|tightness)|bronchospasm|hypotension|low\\s+blood\\s+pressure|tachycardia|palpitations|bradycardia|dizz(?:y|iness)|lightheaded(?:ness)?|syncope|headache|confusion|delirium|hallucinations?|agitation|drowsiness|sedation|flushing|redness|red\\s+man(?:\\s+syndrome)?|blisters?|stevens[- ]johnson(?:\\s+syndrome)?|sjs|ten\\b|toxic\\s+epidermal|seizures?|myalgias?|muscle\\s+(?:pain|aches?)|rhabdo(?:myolysis)?|cough|bleeding|kidney\\s+(?:injury|failure)|renal\\s+failure|thrombocytopenia|hit\\b|intolerance|sensitivity|unknown|other|see\\s+comments?|not\\s+specified|unspecified";
+  const REACTION_RE = new RegExp("\\b(?:" + REACTION_WORDS + ")\\b", "i");
+  const CRITICALITY_RE = /\b(?:high|low|unable\s+to\s+assess|not\s+specified|critical|criticality)\b/gi;
+
+  const DRUG_ALLERGEN_RE = /\b(pcn|penicillins?|amox(?:icillin)?|ampicillin|augmentin|sulfa|sulfonamides?|bactrim|tmp-smx|codeine|morphine|oxycodone|hydrocodone|dilaudid|hydromorphone|aspirin|asa|ibuprofen|nsaids?|naproxen|iodine|contrast|lisinopril|enalapril|ace\s*inhibitors?|vancomycin|cipro(?:floxacin)?|levaquin|levofloxacin|heparin|warfarin|coumadin|statins?|atorvastatin|lidocaine|prednisone|dilantin|phenytoin|keppra|levetiracetam|tramadol|demerol|meperidine|clindamycin|keflex|cephalexin|cefazolin|ancef|cephalosporins?|erythromycin|azithromycin|tetracycline|doxycycline|flagyl|metronidazole|gabapentin|haldol|haloperidol|fluoroquinolones?|macrolides?|opioids?|opiates?|antibiotics?)\b/i;
+  const FOOD_ALLERGEN_RE = /\b(peanuts?|tree\s+nuts?|nuts|almonds?|walnuts?|cashews?|pecans?|shellfish|shrimp|crab|lobster|fish|milk|dairy|lactose|eggs?|wheat|gluten|soy|sesame|strawberr(?:y|ies)|chocolate)\b/i;
+  const ENV_ALLERGEN_RE = /\b(pollen|dust(?:\s+mites?)?|mold|grass(?:es)?|ragweed|cats?|cat\s+dander|dogs?|dog\s+dander|pet\s+dander|bees?|bee\s+stings?|wasps?|hornets?|insect\s+stings?|tape|adhesive(?:\s+tape)?|nickel)\b/i;
+
+  // Things that are never allergens: conditions, procedures, payers, people.
+  const NOT_ALLERGEN_RE = /\b(?:cellulitis|mrsa|vre|esbl|c\.?\s?diff|infection|pneumonia|sepsis|hypertension|blood\s+pressure|high\s*blood|diabet\w*|anxiety|depression|dementia|copd|chf|heart\s+failure|ckd|kidney\s+disease|fracture|hernia|repair|appendectomy|cholecystectomy|surgery|surgical|procedure|history|problem|diagnos\w*|risk|readmission|unplanned|isolation|precautions|bugs|subscriber|medicaid|medicare|insurance|payer|payor|plan|policy|member|group|guarantor|relation|spouse|son|daughter|friend|mother|father|sister|brother|contact|phone|mobile|home|work|attending|provider|physician|nurse|rn|md|do|np|pa-c|reviewed|noted|verified|updated|entered|source|comment|comments|date|printed|page|encounter|admit|discharge|room|bed|unit|mrn|dob|medications?|vitals?|labs?|weight|height|code\s+status|full\s+code|social|family|tobacco|alcohol|smoker|lives)\b/i;
 
   function allergyTypeFromHeader(header) {
     const h = String(header || "").toLowerCase();
-    if (/drug/.test(h)) return "drug";
+    if (/drug|medication/.test(h)) return "drug";
     if (/food/.test(h)) return "food";
     if (/environmental/.test(h)) return "environmental";
     if (/latex/.test(h)) return "latex";
@@ -406,38 +565,27 @@
   }
 
   function inferAllergyType(allergen, hint) {
-    if (hint) return hint;
     const a = String(allergen || "");
     if (/\blatex\b/i.test(a)) return "latex";
+    if (hint === "food" || hint === "environmental") return hint;
     if (FOOD_ALLERGEN_RE.test(a)) return "food";
     if (DRUG_ALLERGEN_RE.test(a)) return "drug";
     if (ENV_ALLERGEN_RE.test(a)) return "environmental";
-    return "other";
+    return hint || "other";
   }
 
-  function isNkdaText(text) {
-    const t = cleanLine(String(text || "")).replace(/[.\s]+$/g, "").replace(/\s+/g, " ");
-    if (!t) return false;
-    if (NKDA_RE.test(t)) return true;
-    if (/^(nka|nkda|nkfa)\b/i.test(t) && !/\bexcept\b|\bbut\b/i.test(t)) return true;
-    return /no\s+known\s+(?:drug\s+|food\s+)?allerg(?:y|ies)/i.test(t) && !/\bexcept\b/i.test(t);
-  }
-
-  function matchAllergyHeader(line) {
-    const t = String(line || "").trim();
-    if (!t) return null;
-    const m = t.match(ALLERGY_HEADER_RE);
-    if (!m) return null;
-    // Avoid treating "allergy to X" mid-sentence as a new section when it lacks a label colon
-    // unless it starts with a known label word.
-    const label = m[1] || "";
-    const remainder = (m[2] || "").trim();
-    return { label, remainder, typeHint: allergyTypeFromHeader(label + " " + t) };
+  function normalizeSeverity(word) {
+    const w = String(word || "").toLowerCase().replace(/_/g, " ");
+    if (/anaphyl/.test(w) || /life/.test(w)) return "life-threatening";
+    if (/severe/.test(w)) return "severe";
+    if (/moderate/.test(w)) return "moderate";
+    if (/mild/.test(w)) return "mild";
+    return "";
   }
 
   function isAllergyTableHeader(line) {
-    const t = String(line || "").replace(/[|+\-_/]/g, " ").replace(/\s+/g, " ").trim();
-    return ALLERGY_TABLE_RE.test(t) && t.split(" ").length <= 12;
+    const t = String(line || "").replace(/[|+_\/.:;,]/g, " ").replace(/\s+/g, " ").trim();
+    return /^(?:allergens?|allerg(?:y|ies)|substance|agent|drug|reactions?|reaction\s+type|severity|criticality|type|noted|date(?:\s+noted)?|onset|comments?|status|verified|source|\s)+$/i.test(t) && t.split(" ").length >= 2;
   }
 
   function splitAllergyItems(text) {
@@ -448,8 +596,7 @@
     const parts = [];
     let buf = "";
     let depth = 0;
-    for (let i = 0; i < t.length; i++) {
-      const ch = t[i];
+    for (const ch of t) {
       if (ch === "(") depth += 1;
       else if (ch === ")") depth = Math.max(0, depth - 1);
       if (ch === "," && depth === 0) {
@@ -463,112 +610,87 @@
     return parts.length ? parts : [t];
   }
 
-  function normalizeSeverity(word) {
-    const w = String(word || "").toLowerCase().replace(/_/g, " ");
-    if (/anaphyl/.test(w) || /life/.test(w)) return "life-threatening";
-    if (/severe/.test(w)) return "severe";
-    if (/moderate/.test(w)) return "moderate";
-    if (/mild/.test(w)) return "mild";
-    return w;
+  function tidy(s) {
+    return String(s || "").replace(/\s+/g, " ").replace(/^[\s,;:.\-–—\/(|]+|[\s,;:.\-–—\/(|]+$/g, "").replace(/\(\s*$/, "").trim();
   }
 
   function parseAllergyItem(raw, typeHint) {
-    let t = stripListMarker(String(raw || "")).trim();
-    t = t.replace(/^[•\-–—*]\s+/, "").replace(/\s+/g, " ").trim();
+    let t = stripListMarker(String(raw || "")).replace(/\s+/g, " ").trim();
     if (!t || SKIP_UNCODED_RE.test(t) || isNkdaText(t)) return null;
-    if (isAllergyTableHeader(t) || matchAllergyHeader(t) && !/^(latex)$/i.test(t)) return null;
+    if (isAllergyTableHeader(t) || detectHeader(t)) return null;
+    // Drop dates and trailing criticality / bookkeeping columns.
+    t = t.replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, " ").replace(/\b(?:19|20)\d{2}\b/g, " ");
+    t = t.replace(/\s+/g, " ").trim();
+
+    let severity = "";
+    const sevMatch = t.match(SEVERITY_WORD_RE);
+    if (sevMatch) severity = normalizeSeverity(sevMatch[0]);
 
     let allergen = t;
     let reaction = "";
-    let severity = "";
-
-    const trailingSev = t.match(/^(.{1,120}?)\s*\(([^)]+)\)\s*$/);
-    if (trailingSev && SEVERITY_WORD_RE.test(trailingSev[2]) && !/,/.test(trailingSev[2])) {
-      severity = normalizeSeverity(trailingSev[2]);
-      t = trailingSev[1].trim();
-      allergen = t;
-    }
-
-    const paren = t.match(/^(.{1,80}?)\s*\(([^)]+)\)\s*$/);
-    if (paren) {
-      allergen = paren[1].trim();
-      const inner = paren[2].trim();
-      const sev = inner.match(SEVERITY_WORD_RE);
-      if (sev && inner.toLowerCase() !== sev[0].toLowerCase()) {
-        severity = normalizeSeverity(sev[0]);
-        reaction = inner.replace(SEVERITY_WORD_RE, " ").replace(/[,\s/;]+$/g, "").replace(/^[,\s/;]+/, "").trim();
-      } else if (sev && /anaphyl/.test(sev[0])) {
-        reaction = "anaphylaxis";
-        severity = "life-threatening";
-      } else if (sev) {
-        severity = normalizeSeverity(sev[0]);
-      } else {
-        reaction = inner;
-      }
+    const rm = t.match(REACTION_RE);
+    const sm = t.match(SEVERITY_WORD_RE);
+    const firstIdx = Math.min(rm ? rm.index : Infinity, sm && /anaphyl/i.test(sm[0]) ? sm.index : Infinity);
+    if (firstIdx !== Infinity && firstIdx > 0) {
+      allergen = t.slice(0, firstIdx);
+      let r = t.slice(firstIdx);
+      r = r.replace(/\b(?:mild|moderate|severe|life[- ]threatening)\b/gi, " ").replace(CRITICALITY_RE, " ");
+      r = r.replace(/[()]/g, " ");
+      reaction = tidy(r).toLowerCase();
+      if (/anaphyl/.test(reaction)) reaction = reaction.replace(/anaphylactic(?:\s+shock)?/, "anaphylaxis");
     } else {
-      const dashed = t.match(/^(.{1,80}?)\s*(?:[-:–]|\/)\s+(.{1,200})$/);
-      if (dashed && !/^\d/.test(dashed[2]) && dashed[1].length <= 60) {
-        allergen = dashed[1].trim();
-        let rest = dashed[2].trim();
-        const sevParen = rest.match(/\(([^)]+)\)\s*$/);
-        if (sevParen && SEVERITY_WORD_RE.test(sevParen[1])) {
-          severity = normalizeSeverity(sevParen[1]);
-          rest = rest.replace(/\s*\([^)]+\)\s*$/, "").trim();
-        }
-        const sevWord = rest.match(SEVERITY_WORD_RE);
-        if (sevWord && rest.toLowerCase() === sevWord[0].toLowerCase()) {
-          severity = normalizeSeverity(sevWord[0]);
-          if (/anaphyl/.test(sevWord[0])) reaction = "anaphylaxis";
-        } else if (sevWord) {
-          severity = normalizeSeverity(sevWord[0]);
-          reaction = rest.replace(SEVERITY_WORD_RE, " ").replace(/[,\s/;]+$/g, "").trim();
-        } else {
-          reaction = rest;
-        }
-      }
+      // No reaction words: keep the allergen, strip severity / criticality.
+      allergen = t.replace(SEVERITY_WORD_RE, " ").replace(CRITICALITY_RE, " ");
     }
+    allergen = tidy(allergen.replace(/\(\s*\)/g, " ").replace(/\s+-\s*$/, ""));
+    // Unbalanced paren left by a "(rash)" style split.
+    if ((allergen.match(/\(/g) || []).length > (allergen.match(/\)/g) || []).length) allergen = tidy(allergen.replace(/\([^)]*$/, ""));
+    if (reaction === "unspecified" || reaction === "not specified") reaction = "";
 
-    allergen = allergen.replace(/[,;:\s]+$/g, "").trim();
-    if (!allergen || allergen.length < 2) return null;
-    if (/^(allergen|allergy|allergies|reaction|severity|type|substance|drug|food)$/i.test(allergen)) return null;
-
+    if (!isPlausibleAllergen(allergen)) return null;
     if (/anaphyl/.test(reaction) && !severity) severity = "life-threatening";
-
-    const type = inferAllergyType(allergen, typeHint);
-    return {
-      allergen,
-      reaction: reaction || "",
-      severity: severity || "",
-      type: type || "other",
-    };
+    return { allergen, reaction, severity, type: inferAllergyType(allergen, typeHint) };
   }
 
-  function parseAllergyTableRow(line, typeHint) {
-    const t = String(line || "").trim();
-    if (!t) return null;
-    const cols = t.split(/\s*\|\s*|\t+| {2,}/).map((c) => c.trim()).filter(Boolean);
-    if (cols.length >= 2 && !isAllergyTableHeader(t)) {
-      const item = {
-        allergen: cols[0],
-        reaction: "",
-        severity: "",
-        type: inferAllergyType(cols[0], typeHint),
-      };
-      if (cols.length >= 3) {
-        item.reaction = cols[1];
-        if (SEVERITY_WORD_RE.test(cols[2])) item.severity = normalizeSeverity(cols[2]);
-        else item.reaction = cols.slice(1).join(" ");
-      } else if (SEVERITY_WORD_RE.test(cols[1]) && !/anaphyl/i.test(cols[1])) {
-        item.severity = normalizeSeverity(cols[1]);
-      } else if (SEVERITY_WORD_RE.test(cols[1]) && /anaphyl/i.test(cols[1])) {
-        item.reaction = "anaphylaxis";
-        item.severity = "life-threatening";
-      } else {
-        item.reaction = cols[1];
-      }
-      if (item.allergen && !/^(allergen|allergy|substance|drug|agent)$/i.test(item.allergen)) return item;
-    }
-    return parseAllergyItem(t, typeHint);
+  // PointClickCare / form style: "Allergen: X  Category: Drug  Reaction: Y  Severity: Z".
+  // Returns undefined when the text is not in that format.
+  function parseAllergyKeyValue(raw, hint) {
+    const t = String(raw || "");
+    if (!/\b(?:reaction|category|severity|type|allergen|substance)\s*:/i.test(t)) return undefined;
+    const fields = {};
+    const re = /\b(allergen|substance|agent|category|type|reaction|severity|criticality|noted|onset|status|comments?)\s*:\s*/gi;
+    const marks = [];
+    let m;
+    while ((m = re.exec(t))) marks.push({ key: m[1].toLowerCase(), start: m.index, valStart: m.index + m[0].length });
+    if (!marks.length) return undefined;
+    const lead = t.slice(0, marks[0].start).trim();
+    if (lead) fields.allergen = lead;
+    marks.forEach((mk, i) => {
+      const end = i + 1 < marks.length ? marks[i + 1].start : t.length;
+      fields[mk.key] = t.slice(mk.valStart, end).trim();
+    });
+    const allergen = tidy(fields.allergen || fields.substance || fields.agent || "");
+    if (!isPlausibleAllergen(allergen)) return null;
+    let reaction = tidy(fields.reaction || "");
+    if (reaction && !REACTION_RE.test(reaction)) reaction = "";
+    const severity = normalizeSeverity(fields.severity || fields.criticality || "") || (/anaphyl/i.test(reaction) ? "life-threatening" : "");
+    const cat = String(fields.category || fields.type || "").toLowerCase();
+    const catType = /drug|medication/.test(cat) ? "drug" : /food/.test(cat) ? "food" : /environment/.test(cat) ? "environmental" : /latex/.test(cat) ? "latex" : "";
+    return { allergen, reaction: reaction.toLowerCase(), severity, type: catType || inferAllergyType(allergen, hint) };
+  }
+
+  function isPlausibleAllergen(a) {
+    if (!a || a.length < 2 || a.length > 60) return false;
+    if (!/[A-Za-z]{3,}|^[A-Z]{2,}$/.test(a)) return false;
+    if (a.split(/\s+/).length > 6) return false;
+    if (/^(?:allergen|allergy|allergies|reaction|severity|type|substance|drug|food|agent|none|yes|no)$/i.test(a)) return false;
+    if (NOT_ALLERGEN_RE.test(a) && !DRUG_ALLERGEN_RE.test(a) && !FOOD_ALLERGEN_RE.test(a) && !/latex/i.test(a)) return false;
+    if (isNonClinicalLine(a)) return false;
+    if (MED_LINE_RE.test(a) && /\b\d/.test(a)) return false;
+    if (/\d{3,}/.test(a)) return false;
+    if (/^[A-Z][a-z]+,\s*[A-Z][a-z]+/.test(a)) return false; // "Lastname, First"
+    if (/[:=]/.test(a)) return false;
+    return true;
   }
 
   function blankAllergies() {
@@ -587,77 +709,69 @@
     return (allergies.items || []).map(formatAllergyItem).filter(Boolean).join("; ");
   }
 
-  function extractAllergies(text) {
-    const empty = blankAllergies();
-    if (!text) return empty;
-    const lines = String(text).replace(/\r\n/g, "\n").split("\n");
-    const items = [];
-    let inSection = false;
-    let typeHint = "";
-    let sawNkda = false;
-    let inTable = false;
+  const MAX_ALLERGY_BLOCK_LINES = 25;
 
-    const addFromText = (raw, hint) => {
+  function extractAllergies(text) {
+    if (!text) return blankAllergies();
+    const rows = segment(text);
+    const items = [];
+    let sawNkda = false;
+    let sawSection = false;
+    let blockLines = 0;
+    let typeHint = "";
+    let blockEnded = false;
+    let strayLines = 0;
+
+    const addFrom = (raw, hint) => {
       if (!raw) return;
-      if (isNkdaText(raw)) {
-        sawNkda = true;
-        return;
-      }
+      const kv = parseAllergyKeyValue(raw, hint);
+      if (kv !== undefined) { if (kv) items.push(kv); return; }
+      if (isNkdaText(raw)) { sawNkda = true; return; }
+      if (/^(?:yes|no|n|y)$/i.test(raw.trim())) return;
       for (const part of splitAllergyItems(raw)) {
-        if (isNkdaText(part)) {
-          sawNkda = true;
-          continue;
-        }
-        const item = inTable ? parseAllergyTableRow(part, hint) : parseAllergyItem(part, hint);
-        if (item && item.allergen) items.push(item);
+        if (isNkdaText(part)) { sawNkda = true; continue; }
+        const item = parseAllergyItem(part, hint);
+        if (item) items.push(item);
       }
     };
 
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      if (!trimmed) continue;
-
-      if (isAllergyTableHeader(trimmed)) {
-        inSection = true;
-        inTable = true;
-        continue;
-      }
-
-      const header = matchAllergyHeader(trimmed);
-      if (header) {
-        inSection = true;
-        inTable = false;
-        typeHint = header.typeHint || typeHint;
-        if (header.remainder) {
-          if (/^(latex)(?:\s+allerg(?:y|ies))?$/i.test(header.label) && !isNkdaText(header.remainder) && splitAllergyItems(header.remainder).length <= 1) {
-            const sev = header.remainder.match(SEVERITY_WORD_RE);
-            items.push({
-              allergen: "Latex",
-              reaction: sev && header.remainder.toLowerCase() === sev[0].toLowerCase() && /anaphyl/.test(sev[0]) ? "anaphylaxis" : header.remainder,
-              severity: sev && /anaphyl/.test(sev[0]) ? "life-threatening" : (sev && header.remainder.toLowerCase() === sev[0].toLowerCase() ? normalizeSeverity(sev[0]) : ""),
-              type: "latex",
-            });
-          } else {
-            addFromText(header.remainder, typeHint);
+    for (const row of rows) {
+      if (row.header) {
+        if (row.header.section === "allergy") {
+          sawSection = true;
+          blockLines = 0;
+          blockEnded = false;
+          strayLines = 0;
+          typeHint = row.header.typeHint || "";
+          let rem = row.header.remainder;
+          const label = row.header.label || "";
+          if (/^latex\b/i.test(label) && rem) {
+            if (/^(?:no|none|n|negative|denies)$/i.test(rem)) continue;
+            if (/^(?:yes|y|positive)$/i.test(rem)) { items.push({ allergen: "Latex", reaction: "", severity: "", type: "latex" }); continue; }
+            if (!/latex/i.test(rem) && (REACTION_RE.test(rem) || SEVERITY_WORD_RE.test(rem))) rem = "Latex " + rem;
           }
+          if (/^environmental\b/i.test(label)) typeHint = "environmental";
+          addFrom(rem, typeHint);
         }
         continue;
       }
-
-      if (inSection && isEndSection(trimmed)) {
-        inSection = false;
-        inTable = false;
-        typeHint = "";
+      if (row.section !== "allergy" || row.blank || blockEnded) continue;
+      blockLines += 1;
+      if (blockLines > MAX_ALLERGY_BLOCK_LINES) { blockEnded = true; continue; }
+      const line = row.line;
+      if (isAllergyTableHeader(line)) continue;
+      if (/^(?:reviewed|last\s+reviewed|verified|updated|marked\s+as\s+reviewed|allergies\s+reviewed)\b/i.test(line)) continue;
+      // A line that clearly belongs to something else (insurance, contacts,
+      // a diagnosis, a procedure) means the allergy list has ended even if the
+      // next header was missed by OCR. Stop reading rather than guess.
+      if (!isNkdaText(line) && (isNonClinicalLine(line) || (NOT_ALLERGEN_RE.test(line) && !REACTION_RE.test(line) && !DRUG_ALLERGEN_RE.test(line) && !FOOD_ALLERGEN_RE.test(line) && !/latex/i.test(line)))) {
+        if (/^(?:reviewed|noted|entered|source)\b/i.test(line)) continue;
+        strayLines += 1;
+        if (strayLines >= 2) blockEnded = true;
         continue;
       }
-
-      if (inSection) {
-        if (isNkdaText(trimmed)) {
-          sawNkda = true;
-          continue;
-        }
-        addFromText(trimmed, typeHint);
-      }
+      strayLines = 0;
+      addFrom(line, typeHint);
     }
 
     const unique = [];
@@ -668,10 +782,143 @@
       seen.add(key);
       unique.push(item);
     }
-
     if (unique.length) return { status: "listed", items: unique };
     if (sawNkda) return { status: "nkda", items: [] };
-    return empty;
+    return { status: "unknown", items: [], sectionFound: sawSection };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Other fields
+
+  function titleCaseName(s) {
+    return String(s || "").toLowerCase().replace(/(^|[\s'\-])([a-z])/g, (m, p, c) => p + c.toUpperCase());
+  }
+
+  const NAME_STOP_RE = /\b(?:hospital|medical|center|health|regional|clinic|facility|referral|insurance|medicare|medicaid|printed|page|face|sheet|history|physical|discharge|summary|unknown|patient|report)\b/i;
+
+  function plausibleName(n) {
+    if (!n) return false;
+    const t = n.trim();
+    if (t.length < 3 || t.length > 60) return false;
+    if (NAME_STOP_RE.test(t)) return false;
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 5) return false;
+    return /^[A-Za-z][A-Za-z' .\-]+$/.test(t);
+  }
+
+  function flipName(lastFirst) {
+    const m = String(lastFirst || "").match(/^\s*([A-Za-z'\-]+(?:\s+[A-Za-z'\-]+)?)\s*,\s*([A-Za-z'\-]+(?:\s+[A-Za-z'\-.]+){0,2})\s*$/);
+    if (!m) return lastFirst;
+    return `${m[2]} ${m[1]}`.replace(/\s+/g, " ").trim();
+  }
+
+  function extractName(text) {
+    const labeled = pick(text, [
+      /(?:^|\n)[ \t]*(?:Patient|Resident)\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .,\-]{1,80})/i,
+      /(?:^|\n)[ \t]*(?:Patient|Resident)\s*[:\-]\s*([A-Za-z][A-Za-z' .,\-]{1,80}?)(?:\s*\(|\s{2,}|\s+(?:MRN|DOB|ID)\b|$)/im,
+      /(?:^|\n)[ \t]*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .,\-]{1,80})/i,
+    ]);
+    if (labeled) {
+      let n = labeled.replace(/\s+(?:MRN|DOB|Sex|Age|ID)\b.*$/i, "").trim();
+      if (n.includes(",")) n = flipName(n);
+      if (/^[A-Z' .\-]+$/.test(n)) n = titleCaseName(n);
+      if (plausibleName(n)) return n;
+    }
+    // Epic banner: "LASTNAME, FIRST MIDDLE  MRN: 123  DOB: ..."
+    const banner = String(text).match(/(?:^|\n)[ \t]*([A-Z][A-Za-z'\-]+(?:\s[A-Z][A-Za-z'\-]+)?,\s*[A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-.]*){0,2})\s+(?:MRN|DOB|Sex|Age|CSN)\b/);
+    if (banner) {
+      let n = flipName(banner[1]);
+      if (/^[A-Z' .\-]+$/.test(n)) n = titleCaseName(n);
+      if (plausibleName(n)) return n;
+    }
+    return "";
+  }
+
+  const DATE_PAT = "(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4})";
+
+  function pickDate(text, labels, opts) {
+    for (const label of labels) {
+      const re = new RegExp("(?:^|[\\s|])" + label + "\\s*[:\\-#]?\\s*" + DATE_PAT, "im");
+      const m = String(text).match(re);
+      if (m) {
+        const d = normalizeDob(m[1], opts);
+        if (d) return d;
+      }
+    }
+    return "";
+  }
+
+  function extractHospital(text) {
+    const labeled = pick(text, [
+      /Referring\s*(?:Hospital|Facility|Source)\s*[:\-]\s*([^\n]+)/i,
+      /Discharg(?:e|ing)\s*(?:From|Hospital|Facility)\s*[:\-]\s*([^\n]+)/i,
+      /(?:^|\n)[ \t]*(?:Hospital|Sending\s+Facility|Transferring\s+Facility)(?:\s*Name)?\s*[:\-]\s*([^\n]+)/i,
+    ]);
+    if (labeled) return cutAtNextLabel(labeled);
+    const lines = String(text).split(/\r?\n/).slice(0, 12);
+    for (const raw of lines) {
+      let l = raw.trim();
+      if (!l || l.length > 80 || /[:@]/.test(l) || /\d{3,}/.test(l)) continue;
+      if (/printed|page\s+\d/i.test(l)) continue;
+      if (/\b(?:hospital|medical\s+center|medical\s+centre|health\s+(?:system|center)|regional\s+medical|memorial|infirmary)\b/i.test(l)) {
+        l = l.split(/\s{2,}/)[0].replace(/\s+(?:inpatient|outpatient|face\s*sheet|patient\s+face\s*sheet).*$/i, "").trim();
+        return /^[A-Z0-9 .,'&\-]+$/.test(l) ? titleCaseName(l).replace(/\bSt\b/g, "St") : l;
+      }
+    }
+    return "";
+  }
+
+  // Payer is read from insurance lines only, never from the whole document.
+  function payerLines(text) {
+    const rows = segment(text);
+    const out = [];
+    for (const r of rows) {
+      if (r.blank) continue;
+      const labeled = /^(?:(?:primary|secondary)\s+)?(?:insurance|payer|payor|plan|coverage|financial\s+class)\b/i.test(r.line);
+      if (r.section === "insurance" || labeled) out.push(r.header ? r.header.remainder || r.line : r.line);
+    }
+    return out.join("\n");
+  }
+
+  function pickPlan(text) {
+    return pick(text, [
+      /(?:^|\n)[ \t]*(?:Primary\s+)?Insurance\s*[:\-]\s*([^\n]+)/i,
+      /(?:^|\n)[ \t]*(?:Primary\s+)?Payer\s*[:\-]\s*([^\n]+?)(?:\s{2,}|$)/im,
+      /(?:^|\n)[ \t]*Plan\s*[:\-]\s*([^\n]+)/i,
+    ]);
+  }
+
+  function guessPayer(text) {
+    const src = payerLines(text);
+    const notes = cutAtNextLabel(pickPlan(text) || pickPlan(src));
+    if (!src.trim()) return { payer: "", notes: "" };
+    const t = src.toLowerCase();
+    const hasMed = /medicare/.test(t);
+    const hasCaid = /medicaid|medi-cal|medi cal/.test(t);
+    const ma = /medicare\s+advantage|\b(?:hmo|ppo|snp|d-snp|mapd)\b|gold\s+plus|humana|aetna\s+medicare|united\s*healthcare\s+medicare|aarp\s+medicare\s+advantage|wellcare|scan\s+health|kaiser/.test(t) && !/supplement|medigap/.test(t);
+    if (hasMed && hasCaid) return { payer: "medicare-medicaid", notes };
+    if (ma && (hasMed || /humana|wellcare|scan/.test(t))) return { payer: "mco", notes };
+    if (hasMed) return { payer: "medicare", notes };
+    if (hasCaid) return { payer: "medicaid", notes };
+    if (/private\s+pay|self[- ]pay/.test(t)) return { payer: "private-pay", notes };
+    if (/aetna|blue\s*cross|bcbs|anthem|united\s*healthcare|uhc|cigna|humana|tricare|commercial|private\s+insurance|employer|ppo|hmo|epo/.test(t)) return { payer: "private", notes };
+    return { payer: "", notes };
+  }
+
+  // True when the pattern appears at least once without a nearby negation
+  // ("no oxygen", "tube feeding not required", "Isolation: none").
+  function needMentioned(text, re) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m;
+    while ((m = g.exec(text))) {
+      const before = text.slice(Math.max(0, m.index - 24), m.index);
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 28);
+      if (m[0].length === 0) { g.lastIndex += 1; continue; }
+      if (/\b(?:no|not|denies|without|w\/o|non)\s*[-:]?\s*$/i.test(before)) continue;
+      if (/^\s*[:\-]?\s*(?:not\s+(?:required|needed|indicated)|none|no\b|n\/a|discontinued|d\/c)/i.test(after)) continue;
+      return true;
+    }
+    return false;
   }
 
   function formatDiagnosis(item) {
@@ -690,48 +937,27 @@
     }).filter(Boolean).join("; ");
   }
 
-  function extractFields(text) {
-    const name = pick(text, [
-      /Patient\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-      /Resident\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-      /(?:^|\n)\s*Name\s*[:\-]\s*([A-Za-z][A-Za-z' .\-]{1,80})/i,
-    ]);
-    const dobRaw = pick(text, [
-      /Date\s*of\s*Birth\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /DOB\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]);
-    const hospital = pick(text, [
-      /Referring\s*(?:Hospital|Facility|Source)\s*[:\-]\s*([^\n]+)/i,
-      /Discharge\s*(?:From|Hospital)\s*[:\-]\s*([^\n]+)/i,
-      /Hospital\s*[:\-]\s*([^\n]+)/i,
-    ]);
-    const diagnoses = extractDiagnoses(text);
+  function extractFields(text, opts) {
+    const src = String(text || "");
+    const name = extractName(src);
+    const thisYear = new Date().getFullYear();
+    const dob = pickDate(src, ["Date\\s*of\\s*Birth", "Birth\\s*Date", "DOB", "D\\.O\\.B\\.?"], { minYear: 1900, maxYear: thisYear });
+    const hospital = extractHospital(src);
+    const diagnoses = extractDiagnoses(src, opts);
     const primary = diagnoses.find((d) => d.primary) || diagnoses[0];
-    let diagnosis = formatDiagnosis(primary);
-    if (!diagnosis) {
-      diagnosis = pick(text, [
-        /Primary\s*Diagnosis\s*[:\-]\s*([^\n]+)/i,
-        /Admitting\s*Diagnosis\s*[:\-]\s*([^\n]+)/i,
-        /Diagnosis\s*[:\-]\s*([^\n]+)/i,
-      ]);
-    }
-    const dateReceived = normalizeDob(pick(text, [
-      /Referral\s*Date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Date\s*Received\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Date\s*of\s*Referral\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]));
-    const expected = normalizeDob(pick(text, [
-      /Proposed\s*Discharge\s*Date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Expected\s*Admit(?:\s*Date)?\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-      /Admit(?:\s*Date)?\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    ]));
-    const payerGuess = guessPayer(text);
-    const needs = NEED_KEYWORDS.filter((n) => n.re.test(text)).map((n) => n.id);
-    const notes = pick(text, [/Notes?\s*[:\-]\s*([^\n]{10,400})/i]);
-    const allergies = extractAllergies(text);
+    const diagnosis = formatDiagnosis(primary);
+    const dateReceived = pickDate(src, ["Referral\\s*Date", "Date\\s*Received", "Date\\s*of\\s*Referral", "Referral\\s*Received", "Received"], { minYear: 2000, maxYear: thisYear + 1 });
+    const expected = pickDate(src, [
+      "Proposed\\s*Discharge\\s*Date", "Anticipated\\s*Discharge(?:\\s*Date)?", "Expected\\s*Discharge(?:\\s*Date)?", "Estimated\\s*Discharge(?:\\s*Date)?", "Planned\\s*Discharge(?:\\s*Date)?",
+      "Expected\\s*Admit(?:\\s*Date)?", "Anticipated\\s*Admit(?:\\s*Date)?", "Planned\\s*Admit(?:\\s*Date)?", "Projected\\s*Admit(?:\\s*Date)?", "SNF\\s*Admit(?:\\s*Date)?",
+    ], { minYear: 2000, maxYear: thisYear + 1 });
+    const payerGuess = guessPayer(src);
+    const needs = NEED_KEYWORDS.filter((n) => needMentioned(src, n.re)).map((n) => n.id);
+    const notes = pick(src, [/(?:^|\n)[ \t]*Notes?\s*[:\-]\s*([^\n]{10,400})/i]);
+    const allergies = extractAllergies(src);
     return {
       name,
-      dob: normalizeDob(dobRaw),
+      dob,
       hospital,
       diagnosis,
       diagnoses,
@@ -748,6 +974,7 @@
   return {
     NEED_KEYWORDS,
     ICD_CODE_RE,
+    ICD_CODE_EXACT_RE,
     extractFields,
     extractDiagnoses,
     normalizeIcd10Code,
@@ -763,5 +990,7 @@
     cleanLine,
     normalizeDob,
     guessPayer,
+    segment,
+    detectHeader,
   };
 });
