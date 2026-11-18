@@ -1,0 +1,9 @@
+On-device OCR engine used by Admissions Tracker.
+
+- tesseract.js 7.0.0 (Apache License 2.0) — see TESSERACT-JS-LICENSE.md
+- tesseract.js-core 7.0.0 (Apache License 2.0) — see TESSERACT-CORE-LICENSE
+- English traineddata 4.0.0_best_int from @tesseract.js-data/eng 1.0.0
+  (Apache License 2.0; Tesseract OCR project)
+
+These files are bundled so referral images are read in the browser and are
+never sent to a server or a third-party CDN.

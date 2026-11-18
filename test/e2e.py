@@ -15,6 +15,8 @@ BASE = f"http://127.0.0.1:{PORT}/"
 SAMPLE = ROOT / "test" / "sample-referral.pdf"
 SAMPLE_DOCX = ROOT / "test" / "sample-referral.docx"
 SAMPLE_TXT = ROOT / "test" / "sample-referral.txt"
+SAMPLE_SCAN = ROOT / "test" / "sample-referral-scan.pdf"
+SAMPLE_SCAN_PNG = ROOT / "test" / "sample-referral-scan.png"
 FIXTURES = ROOT / "test" / "fixtures"
 DOWNLOADS = ROOT / "test" / "downloads"
 
@@ -61,9 +63,9 @@ def drop_file(page, test_id, path, mime=""):
     )
 
 
-def expect_extracted(page, *, name, dob, hospital, diagnosis, payer=None, source_snippet=None):
-    expect(page.get_by_test_id("referral-dialog")).to_be_visible()
-    expect(page.get_by_test_id("extract-panel")).to_be_visible(timeout=15000)
+def expect_extracted(page, *, name, dob, hospital, diagnosis, payer=None, source_snippet=None, timeout=15000):
+    expect(page.get_by_test_id("referral-dialog")).to_be_visible(timeout=timeout)
+    expect(page.get_by_test_id("extract-panel")).to_be_visible(timeout=timeout)
     expect(page.get_by_test_id("review-banner")).to_be_visible()
     expect(page.get_by_test_id("referral-name")).to_have_value(name)
     expect(page.get_by_test_id("referral-dob")).to_have_value(dob)
@@ -538,6 +540,77 @@ def test_suggested_codes_and_allergies(page):
     assert "PCN" in raw
 
 
+def attach_external_request_log(page, origin=BASE.rstrip("/")):
+    seen = []
+
+    def on_request(req):
+        url = req.url
+        if url.startswith(origin) or url.startswith("blob:") or url.startswith("data:"):
+            return
+        seen.append(url)
+
+    page.on("request", on_request)
+    return seen
+
+
+def assert_helen_carter_extract(page, timeout=180000):
+    expect_extracted(
+        page,
+        name="Helen Ann Carter",
+        dob="1941-03-17",
+        hospital="Mercy General Hospital",
+        diagnosis="J18.9 Pneumonia, unspecified organism",
+        payer="medicare",
+        source_snippet="Helen Ann Carter",
+        timeout=timeout,
+    )
+    extract = page.get_by_test_id("extract-text").inner_text()
+    assert "J18.9" in extract, extract
+    assert "E11.9" in extract, extract
+    assert "I10" in extract, extract
+    assert "Penicillin" in extract, extract
+    assert "sulfa" in extract.lower(), extract
+    codes = {row["code"] for row in diagnosis_rows(page)}
+    assert "J18.9" in codes, codes
+    assert "E11.9" in codes, codes
+    assert "I10" in codes, codes
+    allergens = {row["allergen"].lower(): row for row in allergy_rows(page)}
+    assert any("penicillin" in name for name in allergens), allergens
+    assert any("sulfa" in name for name in allergens), allergens
+    penicillin = next(row for name, row in allergens.items() if "penicillin" in name)
+    assert "rash" in (penicillin.get("reaction") or "").lower(), penicillin
+
+
+def test_scanned_pdf_and_photo_ocr(page):
+    """Image-only scanned PDF and a PNG photo are read on-device and fill the form."""
+    offsite = attach_external_request_log(page)
+    page.get_by_test_id("nav-dashboard").click()
+    drop_file(page, "dash-dropzone", SAMPLE_SCAN, "application/pdf")
+    progress = page.get_by_test_id("dash-import-progress")
+    expect(progress).to_be_visible(timeout=30000)
+    expect(progress).to_contain_text("Reading scanned page")
+    page.wait_for_function(
+        """() => {
+          const el = document.querySelector('[data-testid=dash-import-progress]');
+          return el && /Reading scanned page 2 of 2/.test(el.textContent || "");
+        }""",
+        timeout=180000,
+    )
+    assert_helen_carter_extract(page)
+    assert not offsite, f"OCR sent requests off this device: {offsite}"
+    page.get_by_test_id("save-referral-btn").click()
+    expect(page.get_by_test_id("view-detail")).to_contain_text("Helen Ann Carter")
+
+    page.get_by_test_id("nav-dashboard").click()
+    drop_file(page, "dash-dropzone", SAMPLE_SCAN_PNG, "image/png")
+    photo_progress = page.get_by_test_id("dash-import-progress")
+    expect(photo_progress).to_be_visible(timeout=30000)
+    expect(photo_progress).to_contain_text("Reading scanned photo")
+    assert_helen_carter_extract(page)
+    assert not offsite, f"OCR sent requests off this device: {offsite}"
+    page.get_by_test_id("cancel-referral-btn").click()
+
+
 def main():
     httpd = start_server()
     errors = []
@@ -576,6 +649,12 @@ def main():
         expect(page.get_by_test_id("stat-new")).to_contain_text("0")
 
         test_suggested_codes_and_allergies(page)
+        page.get_by_test_id("nav-settings").click()
+        page.get_by_test_id("clear-confirm").fill("DELETE")
+        page.get_by_test_id("clear-all-btn").click()
+        expect(page.get_by_test_id("stat-new")).to_contain_text("0")
+
+        test_scanned_pdf_and_photo_ocr(page)
         page.get_by_test_id("nav-settings").click()
         page.get_by_test_id("clear-confirm").fill("DELETE")
         page.get_by_test_id("clear-all-btn").click()

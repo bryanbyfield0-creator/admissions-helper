@@ -1301,6 +1301,46 @@
     }
   }
 
+  function setImportProgress(message, where) {
+    const dash = $("#dash-import-progress");
+    const dlg = $("#dialog-import-progress");
+    if (dash) {
+      const show = !!(message && where === "dash");
+      dash.hidden = !show;
+      dash.textContent = show ? message : "";
+    }
+    if (dlg) {
+      const show = !!(message && where === "dialog");
+      dlg.hidden = !show;
+      dlg.textContent = show ? message : "";
+    }
+    const dashZone = $("#dash-dropzone");
+    const dlgZone = $("#dialog-dropzone");
+    if (dashZone) {
+      const busy = !!(message && where === "dash");
+      dashZone.classList.toggle("is-reading", busy);
+      if (busy) dashZone.setAttribute("aria-busy", "true");
+      else dashZone.removeAttribute("aria-busy");
+    }
+    if (dlgZone) {
+      const busy = !!(message && where === "dialog");
+      dlgZone.classList.toggle("is-reading", busy);
+      if (busy) dlgZone.setAttribute("aria-busy", "true");
+      else dlgZone.removeAttribute("aria-busy");
+    }
+  }
+
+  async function emitProgress(onProgress, message) {
+    if (typeof onProgress === "function") onProgress(message);
+    await new Promise((resolve) => {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      } else {
+        setTimeout(resolve, 16);
+      }
+    });
+  }
+
   function fileKind(file) {
     const name = (file.name || "").toLowerCase();
     const type = (file.type || "").toLowerCase();
@@ -1311,6 +1351,10 @@
       name.endsWith(".txt") || name.endsWith(".csv") || name.endsWith(".md") || name.endsWith(".eml") ||
       type.startsWith("text/") || type === "message/rfc822" || type === "text/csv"
     ) return "text";
+    if (
+      /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(name) ||
+      /^image\/(png|jpe?g|jpg|gif|webp|bmp|heic|heif|heic-sequence|heif-sequence)$/i.test(type)
+    ) return "image";
     return "other";
   }
 
@@ -1449,40 +1493,240 @@
     return text;
   }
 
-  async function readPdfText(arrayBuffer) {
+  const TEXT_LAYER_MIN_CHARS = 40;
+  const OCR_MAX_EDGE = 2000;
+  const OCR_PDF_SCALE_CAP = 2.2;
+
+  function significantCharCount(text) {
+    return (String(text || "").match(/[A-Za-z0-9]/g) || []).length;
+  }
+
+  function vendorUrl(rel) {
+    return new URL(rel, document.baseURI).href;
+  }
+
+  function loadTesseractScript() {
+    return new Promise((resolve, reject) => {
+      if (typeof Tesseract !== "undefined") return resolve();
+      const abs = vendorUrl("vendor/tesseract/tesseract.min.js");
+      const existing = document.querySelector(`script[data-ocr-src="${abs}"]`);
+      const fail = () => reject(new Error("The on-device scanner could not be loaded. Enter the details by hand."));
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", fail, { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = abs;
+      script.async = true;
+      script.dataset.ocrSrc = abs;
+      script.onload = () => resolve();
+      script.onerror = fail;
+      document.head.appendChild(script);
+    });
+  }
+
+  let tessWorkerPromise = null;
+
+  async function getTessWorker(onProgress) {
+    if (!tessWorkerPromise) {
+      tessWorkerPromise = (async () => {
+        await emitProgress(onProgress, "Preparing to read a scanned page...");
+        await loadTesseractScript();
+        if (typeof Tesseract === "undefined" || typeof Tesseract.createWorker !== "function") {
+          throw new Error("The on-device scanner could not be loaded. Enter the details by hand.");
+        }
+        return await Tesseract.createWorker("eng", 1, {
+          workerPath: vendorUrl("vendor/tesseract/worker.min.js"),
+          corePath: vendorUrl("vendor/tesseract"),
+          langPath: vendorUrl("vendor/tesseract/lang"),
+          gzip: true,
+          workerBlobURL: true,
+        });
+      })();
+    }
+    try {
+      return await tessWorkerPromise;
+    } catch (err) {
+      tessWorkerPromise = null;
+      throw err;
+    }
+  }
+
+  function releaseCanvas(canvas) {
+    if (!canvas) return;
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+
+  function canvasFromSize(width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width));
+    canvas.height = Math.max(1, Math.round(height));
+    const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: false });
+    if (!ctx) throw new Error("This browser cannot read a scanned page. Enter the details by hand.");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return { canvas, ctx };
+  }
+
+  async function renderPdfPageToCanvas(page) {
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(OCR_PDF_SCALE_CAP, OCR_MAX_EDGE / Math.max(base.width, base.height, 1));
+    const viewport = page.getViewport({ scale });
+    const { canvas, ctx } = canvasFromSize(viewport.width, viewport.height);
+    await page.render({ canvasContext: ctx, viewport, background: "rgb(255,255,255)" }).promise;
+    return canvas;
+  }
+
+  function repairOcrIcdCodes(text) {
+    // Printed I, O, S, G, and B at the start of an ICD-10 code are often read as 1, 0, 5, 6, or 8.
+    // Only change a lookalike when it is followed by a word (a description), so values like room 110 stay put.
+    const lead = { "1": "I", "0": "O", "5": "S", "6": "G", "8": "B" };
+    return String(text || "").replace(
+      /\b([01568])(\d{2}(?:\.[0-9A-Za-z]{1,4})?)(\s+)(?=[A-Za-z])/g,
+      (all, first, rest, space) => (lead[first] || first) + rest + space
+    );
+  }
+
+  async function ocrCanvas(canvas, onProgress, label) {
+    await emitProgress(onProgress, label);
+    const worker = await getTessWorker(onProgress);
+    await emitProgress(onProgress, label);
+    const result = await worker.recognize(canvas);
+    const raw = String((result && result.data && result.data.text) || "").replace(/\f/g, "\n").trim();
+    return repairOcrIcdCodes(raw);
+  }
+
+  function textFromPdfItems(content) {
+    let line = "";
+    let lastY = null;
+    const bits = [];
+    for (const item of content.items) {
+      const y = item.transform ? item.transform[5] : 0;
+      if (lastY != null && Math.abs(lastY - y) > 6) {
+        bits.push(line.trim());
+        line = "";
+      } else if (line && item.hasEOL) {
+        bits.push(line.trim());
+        line = "";
+      } else if (line && !line.endsWith(" ") && item.str && !item.str.startsWith(" ")) {
+        line += " ";
+      }
+      line += item.str || "";
+      lastY = y;
+      if (item.hasEOL) {
+        bits.push(line.trim());
+        line = "";
+      }
+    }
+    if (line.trim()) bits.push(line.trim());
+    return bits.filter(Boolean).join("\n");
+  }
+
+  async function readPdfText(arrayBuffer, onProgress) {
     if (typeof pdfjsLib === "undefined") throw new Error("PDF reader is missing");
     pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
-    const doc = await pdfjsLib.getDocument({ data: arrayBuffer, disableRange: true, disableStream: true }).promise;
+    let doc;
+    try {
+      doc = await pdfjsLib.getDocument({ data: arrayBuffer, disableRange: true, disableStream: true }).promise;
+    } catch (err) {
+      const name = err && err.name;
+      const msg = (err && err.message) || "";
+      if (name === "PasswordException" || /password/i.test(msg)) {
+        throw new Error("This PDF is password-protected. Enter the details by hand.");
+      }
+      throw err;
+    }
     const pages = [];
-    for (let i = 1; i <= doc.numPages; i++) {
+    const total = doc.numPages;
+    for (let i = 1; i <= total; i++) {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      let line = "";
-      let lastY = null;
-      const bits = [];
-      for (const item of content.items) {
-        const y = item.transform ? item.transform[5] : 0;
-        if (lastY != null && Math.abs(lastY - y) > 6) {
-          bits.push(line.trim());
-          line = "";
-        } else if (line && item.hasEOL) {
-          bits.push(line.trim());
-          line = "";
-        } else if (line && !line.endsWith(" ") && item.str && !item.str.startsWith(" ")) {
-          line += " ";
-        }
-        line += item.str || "";
-        lastY = y;
-        if (item.hasEOL) {
-          bits.push(line.trim());
-          line = "";
+      const layerText = textFromPdfItems(content);
+      let pageText = layerText;
+      if (significantCharCount(layerText) < TEXT_LAYER_MIN_CHARS) {
+        let canvas;
+        try {
+          canvas = await renderPdfPageToCanvas(page);
+          const ocrText = await ocrCanvas(canvas, onProgress, "Reading scanned page " + i + " of " + total + "...");
+          pageText = [layerText, ocrText].filter(Boolean).join("\n").trim();
+        } finally {
+          releaseCanvas(canvas);
+          if (page && typeof page.cleanup === "function") page.cleanup();
         }
       }
-      if (line.trim()) bits.push(line.trim());
-      pages.push(bits.filter(Boolean).join("\n"));
+      if (pageText) pages.push(pageText);
     }
     return pages.join("\n\n").trim();
   }
+
+  function heicUnsupportedMessage() {
+    return "This photo format cannot be read in this browser. Try a JPG or PNG, or open it in Safari on iPhone, or enter the details by hand.";
+  }
+
+  async function rasterFromImageFile(file) {
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    const isHeic = /\.(heic|heif)$/i.test(name) || /image\/hei[cf]/.test(type);
+    const url = URL.createObjectURL(file);
+    try {
+      if (typeof createImageBitmap === "function") {
+        try {
+          const bitmap = await createImageBitmap(file);
+          const maxEdge = Math.max(bitmap.width, bitmap.height, 1);
+          const scale = Math.min(1, OCR_MAX_EDGE / maxEdge);
+          const { canvas, ctx } = canvasFromSize(bitmap.width * scale, bitmap.height * scale);
+          ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          if (typeof bitmap.close === "function") bitmap.close();
+          return canvas;
+        } catch (err) {
+          if (isHeic) throw new Error(heicUnsupportedMessage());
+        }
+      }
+      const img = new Image();
+      img.decoding = "async";
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error(isHeic
+          ? heicUnsupportedMessage()
+          : "This photo could not be read. Try a JPG, PNG, or PDF, or enter the details by hand."));
+        img.src = url;
+      });
+      if (typeof img.decode === "function") {
+        try { await img.decode(); } catch (_err) { /* onload already fired */ }
+      }
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+      if (!width || !height) {
+        throw new Error(isHeic
+          ? heicUnsupportedMessage()
+          : "This photo could not be read. Try a JPG, PNG, or PDF, or enter the details by hand.");
+      }
+      const scale = Math.min(1, OCR_MAX_EDGE / Math.max(width, height));
+      const { canvas, ctx } = canvasFromSize(width * scale, height * scale);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function readImageText(file, onProgress) {
+    let canvas;
+    try {
+      await emitProgress(onProgress, "Reading scanned photo...");
+      canvas = await rasterFromImageFile(file);
+      const text = await ocrCanvas(canvas, onProgress, "Reading scanned photo...");
+      if (!text) {
+        throw new Error("No readable text was found in this photo. Handwriting and very blurry photos may not be readable. Enter the details by hand.");
+      }
+      return text;
+    } finally {
+      releaseCanvas(canvas);
+    }
+  }
+
 
   function cleanupPlainText(text, filename) {
     let t = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -1498,17 +1742,20 @@
     return t.trim();
   }
 
-  async function readReferralFile(file) {
+  async function readReferralFile(file, onProgress) {
     const kind = fileKind(file);
     if (kind === "doc") {
       throw new Error("Older Word .doc files cannot be read here. Please save the file as .docx, PDF, or plain text, or enter the details by hand.");
     }
     if (kind === "other") {
-      throw new Error("This file type is not supported. Drop a PDF, a Word file (.docx), or a text file (.txt, .csv, .md, or .eml).");
+      throw new Error("This file type is not supported. Drop a PDF, a Word file (.docx), a text file (.txt, .csv, .md, or .eml), or a photo (JPG, PNG, or HEIC).");
+    }
+    if (kind === "image") {
+      return await readImageText(file, onProgress);
     }
     if (kind === "pdf") {
-      const text = await readPdfText(await file.arrayBuffer());
-      if (!text) throw new Error("No readable text was found. Scanned image-only PDFs cannot be read here. Enter the details by hand.");
+      const text = await readPdfText(await file.arrayBuffer(), onProgress);
+      if (!text) throw new Error("No readable text was found in this scan. Handwriting and very blurry pages may not be readable. Enter the details by hand.");
       return text;
     }
     if (kind === "docx") {
@@ -1575,17 +1822,21 @@
     const where = source === "dash" && !dialogIsOpen() ? "dash" : "dialog";
     setImportError("", "dash");
     setImportError("", "dialog");
+    setImportProgress("", "dash");
+    setImportProgress("", "dialog");
     try {
-      const text = await readReferralFile(file);
+      const text = await readReferralFile(file, (message) => setImportProgress(message, where));
       if (where === "dash") openReferralForm();
       applyExtractedText(text, file.name, "The file was read on this device. Review before you save.");
     } catch (err) {
       console.error(err);
       let message = err && err.message ? err.message : "This file could not be read. Enter the details by hand.";
-      if (fileKind(file) === "pdf" && !/readable text|password|image-only|not supported/i.test(message)) {
-        message = "This PDF could not be read. It may be password-protected or image-only. Enter the details by hand.";
+      if (fileKind(file) === "pdf" && !/readable text|password|protected|image-only|not supported|scanned|handwriting|blurry|scanner could not/i.test(message)) {
+        message = "This PDF could not be read. It may be password-protected or damaged. Enter the details by hand.";
       }
       setImportError(message, where);
+    } finally {
+      setImportProgress("", where);
     }
   }
 
