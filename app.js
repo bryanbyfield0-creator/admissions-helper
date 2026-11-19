@@ -1714,9 +1714,69 @@
     return bits.filter(Boolean).join("\n");
   }
 
+  // How much of the page is covered by images (0..1), from the page's drawing
+  // operators. A fax or scanner PDF draws one big picture per page, sometimes
+  // with a tiny real text layer on top (the fax header stamp), so a page can
+  // have text and still need OCR for everything else.
+  async function pageImageCoverage(page) {
+    try {
+      if (typeof pdfjsLib === "undefined" || !pdfjsLib.OPS) return 0;
+      const OPS = pdfjsLib.OPS;
+      const ops = await page.getOperatorList();
+      const view = page.view || [0, 0, 612, 792];
+      const pageArea = Math.abs((view[2] - view[0]) * (view[3] - view[1])) || 1;
+      const mul = (m, n) => [
+        m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+        m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+        m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+      ];
+      let ctm = [1, 0, 0, 1, 0, 0];
+      const stack = [];
+      let covered = 0;
+      const imageOps = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject, OPS.paintJpegXObject, OPS.paintImageXObjectRepeat].filter((v) => v != null));
+      for (let i = 0; i < ops.fnArray.length; i++) {
+        const fn = ops.fnArray[i];
+        const args = ops.argsArray[i];
+        if (fn === OPS.save) stack.push(ctm);
+        else if (fn === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+        else if (fn === OPS.transform && args && args.length >= 6) ctm = mul(ctm, args);
+        else if (fn === OPS.paintFormXObjectBegin && args && Array.isArray(args[0]) && args[0].length >= 6) { stack.push(ctm); ctm = mul(ctm, args[0]); }
+        else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+        else if (imageOps.has(fn)) covered += Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]);
+      }
+      return Math.min(1, covered / pageArea);
+    } catch (err) {
+      console.warn("Could not check the page for images", err);
+      return 0;
+    }
+  }
+
+  // True when the page's real text sits only in a thin band at the top or
+  // bottom (fax header/footer stamps, "Page 1 of 3").
+  function textOnlyInMargins(content, page) {
+    const view = (page && page.view) || [0, 0, 612, 792];
+    const h = Math.abs(view[3] - view[1]) || 792;
+    const band = h * 0.1;
+    const items = (content && content.items || []).filter((it) => it.str && it.str.trim() && it.transform);
+    if (!items.length) return true;
+    return items.every((it) => {
+      const y = it.transform[5] - view[1];
+      return y < band || y > h - band;
+    });
+  }
+
+  function pageNeedsOcr(layerText, coverage, content, page) {
+    const chars = significantCharCount(layerText);
+    if (chars < TEXT_LAYER_MIN_CHARS) return true;
+    if (coverage < 0.4) return false;
+    // A scanned page with a small stamp or a thin header layer.
+    return chars < 400 || textOnlyInMargins(content, page);
+  }
+
   async function readPdfText(arrayBuffer, onProgress) {
-    if (typeof pdfjsLib === "undefined") throw new Error("PDF reader is missing");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+    if (typeof pdfjsLib === "undefined") throw new Error("The PDF reader did not load. Refresh the page and try again, or enter the details by hand.");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = vendorUrl("vendor/pdf.worker.min.js");
+    await emitProgress(onProgress, "Opening the PDF...");
     let doc;
     try {
       doc = await pdfjsLib.getDocument({ data: arrayBuffer, disableRange: true, disableStream: true }).promise;
@@ -1731,11 +1791,13 @@
     const pages = [];
     const total = doc.numPages;
     for (let i = 1; i <= total; i++) {
+      await emitProgress(onProgress, "Reading page " + i + " of " + total + "...");
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
       const layerText = textFromPdfItems(content);
       let pageText = layerText;
-      if (significantCharCount(layerText) < TEXT_LAYER_MIN_CHARS) {
+      const coverage = significantCharCount(layerText) < TEXT_LAYER_MIN_CHARS ? 1 : await pageImageCoverage(page);
+      if (pageNeedsOcr(layerText, coverage, content, page)) {
         let canvas;
         try {
           canvas = await renderPdfPageToCanvas(page);
@@ -1938,6 +2000,7 @@
     toast(toastMessage || "The file was read on this device. Review before you save.");
     const banner = $("#review-banner");
     if (banner && !banner.hidden) banner.scrollIntoView({ block: "nearest" });
+    return filledFromPdf.size + guessed.needs.length;
   }
 
   function dialogIsOpen() {
@@ -1952,10 +2015,14 @@
     setImportError("", "dialog");
     setImportProgress("", "dash");
     setImportProgress("", "dialog");
+    setImportProgress("Opening " + (file.name || "the file") + "...", where);
     try {
       const text = await readReferralFile(file, (message) => setImportProgress(message, where));
       if (where === "dash") openReferralForm();
-      await applyExtractedText(text, file.name, "The file was read on this device. Please verify every item before you save.", where === "dash" ? "dialog" : where);
+      const found = await applyExtractedText(text, file.name, "The file was read on this device. Please verify every item before you save.", where === "dash" ? "dialog" : where);
+      if (found === 0) {
+        setImportError("Nothing could be filled in from this file. It may be a faint scan or an unusual layout. Check the Extracted text box at the bottom of this form, and enter the details by hand.", "dialog");
+      }
     } catch (err) {
       console.error(err);
       let message = err && err.message ? err.message : "This file could not be read. Enter the details by hand.";
@@ -1982,7 +2049,7 @@
     await applyExtractedText(cleaned, "Pasted text", "The pasted text was read on this device. Please verify every item before you save.", "dialog");
   }
 
-  function bindDropzone(el, onFile) {
+  function bindDropzone(el, onFile, input, onNoFile) {
     if (!el) return;
     let enter = 0;
     el.addEventListener("dragenter", (e) => {
@@ -1992,7 +2059,6 @@
       el.classList.add("is-dragover");
     });
     el.addEventListener("dragover", (e) => {
-      if (!hasDragFiles(e)) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
@@ -2004,14 +2070,31 @@
       if (enter === 0) el.classList.remove("is-dragover");
     });
     el.addEventListener("drop", (e) => {
-      if (!hasDragFiles(e) && !(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)) return;
+      const hasFiles = hasDragFiles(e) || !!(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length);
+      if (!hasFiles) {
+        // A link, picture or e-mail attachment dragged straight from a browser or Outlook
+        // arrives without a file. Say so instead of doing nothing.
+        e.preventDefault();
+        enter = 0;
+        el.classList.remove("is-dragover");
+        if (onNoFile) onNoFile();
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       enter = 0;
       el.classList.remove("is-dragover");
       const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
       if (file) onFile(file);
+      else if (onNoFile) onNoFile();
     });
+    if (input) {
+      // Clicking anywhere on the drop area (not on its buttons or paste box) opens the file picker.
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("button, a, label, input, textarea, select, .paste-panel")) return;
+        input.click();
+      });
+    }
   }
 
   function onPdfUpload(ev) {
@@ -2212,8 +2295,9 @@
     bindAllergiesEditor();
     $("#pdf-upload").addEventListener("change", onPdfUpload);
     $("#dash-file-input").addEventListener("change", onDashFile);
-    bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"));
-    bindDropzone($("#dialog-dropzone"), (file) => importReferralFile(file, "dialog"));
+    const noFileMsg = "That did not come through as a file. Save the referral to your computer first (for example, Download in your e-mail), then drop it here or use Choose file.";
+    bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"), $("#dash-file-input"), () => setImportError(noFileMsg, dialogIsOpen() ? "dialog" : "dash"));
+    bindDropzone($("#dialog-dropzone"), (file) => importReferralFile(file, "dialog"), $("#pdf-upload"), () => setImportError(noFileMsg, "dialog"));
     document.addEventListener("dragover", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
     document.addEventListener("drop", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
     $("#dash-paste-toggle").addEventListener("click", () => {
