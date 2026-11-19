@@ -593,7 +593,10 @@ def assert_helen_carter_extract(page, timeout=180000):
     assert "I10" in extract, extract
     assert "Penicillin" in extract, extract
     assert "sulfa" in extract.lower(), extract
-    codes = {row["code"] for row in diagnosis_rows(page)}
+    rows = diagnosis_rows(page)
+    # No junk rows (e.g. the "POST-ACUTE REFERRAL (page 2)" page header).
+    assert sorted(r["code"] for r in rows) == ["E11.9", "I10", "J18.9"], rows
+    codes = {row["code"] for row in rows}
     assert "J18.9" in codes, codes
     assert "E11.9" in codes, codes
     assert "I10" in codes, codes

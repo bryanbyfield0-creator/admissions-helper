@@ -266,6 +266,8 @@
     if (isNkdaText(t)) return false;
     if (detectHeader(t)) return false;
     if (/\bicd-?10\b|\breviewed\b|\bsee\s+(?:above|below)\b/i.test(t)) return false;
+    if (/\bpage\s+\d+\b/i.test(t)) return false; // page header/footer, e.g. "POST-ACUTE REFERRAL (page 2)"
+    if (!/[a-z]/.test(t) && /\b(?:REFERRAL|SUMMARY|RECORD|SHEET|FORM|PACKET|FAX|NOTE|REPORT)S?\b/.test(t)) return false; // all-caps document title
     const words = t.split(/\s+/);
     if (words.length > (section === "assessment" ? 8 : 12) || t.length > 110) return false;
     if (/[.!?]\s+[A-Za-z]/.test(t)) return false; // prose sentence
@@ -399,6 +401,7 @@
       if (code && !out.some((o) => o.code === code)) out.push({ code, repaired });
     };
     push(t, false);
+    if (/^[0-9]+$/.test(t)) return out; // plain numbers (years, room numbers) are never repaired into codes
     const body = t.replace(".", "");
     const first = OCR_FIRST_CHAR[body[0]] || body[0].toUpperCase();
     const second = body.slice(1, 2).replace(/[Oo]/, "0").replace(/[Il|]/, "1").replace(/S/, "5");
