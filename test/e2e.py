@@ -41,6 +41,12 @@ def start_server():
 
 
 
+def dx_value(text):
+    """Primary diagnosis field: the referral's words, optionally after a (suggested) code."""
+    import re as _re
+    return _re.compile(r"^(?:[A-Z][0-9][0-9A-Z](?:\.[0-9A-Z]{1,4})? )?" + _re.escape(text) + r"$")
+
+
 def drop_file(page, test_id, path, mime=""):
     payload = list(path.read_bytes())
     page.evaluate(
@@ -70,7 +76,7 @@ def expect_extracted(page, *, name, dob, hospital, diagnosis, payer=None, source
     expect(page.get_by_test_id("referral-name")).to_have_value(name)
     expect(page.get_by_test_id("referral-dob")).to_have_value(dob)
     expect(page.get_by_test_id("referral-hospital")).to_have_value(hospital)
-    expect(page.get_by_test_id("referral-diagnosis")).to_have_value(diagnosis)
+    expect(page.get_by_test_id("referral-diagnosis")).to_have_value(dx_value(diagnosis))
     if payer:
         expect(page.get_by_test_id("referral-payer")).to_have_value(payer)
     if source_snippet:
@@ -205,7 +211,7 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("referral-name")).to_have_value("Jane Marie Doe")
     expect(page.get_by_test_id("referral-dob")).to_have_value("1948-03-14")
     expect(page.get_by_test_id("referral-hospital")).to_have_value("Inland Valley Medical Center")
-    expect(page.get_by_test_id("referral-diagnosis")).to_have_value("Right hip fracture, s/p ORIF")
+    expect(page.get_by_test_id("referral-diagnosis")).to_have_value(dx_value("Right hip fracture, s/p ORIF"))
     wait_for_uncoded_with_suggestions(page, {"Hypertension": "I10", "Type 2 diabetes mellitus": "E11.9"})
     jane_dx = diagnosis_rows(page)
     assert [r["description"] for r in jane_dx] == [
@@ -215,8 +221,9 @@ def add_pdf_referral(page):
     ], jane_dx
     assert jane_dx[0]["primary"] is True
     by_desc = {r["description"]: r for r in jane_dx}
-    assert by_desc["Hypertension"]["code"] == ""
-    assert by_desc["Type 2 diabetes mellitus"]["code"] == ""
+    assert by_desc["Hypertension"]["code"] == "I10"
+    assert by_desc["Type 2 diabetes mellitus"]["code"] == "E11.9"
+    assert by_desc["Right hip fracture, s/p ORIF"]["code"] == "S72.001A"
     expect(page.get_by_test_id("verify-pill").first).to_be_visible()
     expect(page.get_by_test_id("referral-payer")).to_have_value("medicare-medicaid")
     expect(page.get_by_test_id("referral-date-received")).to_have_value("2026-11-13")
@@ -231,7 +238,7 @@ def add_pdf_referral(page):
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Right hip fracture, s/p ORIF")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Type 2 diabetes mellitus")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("S72.001A")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("not listed")
 
 
@@ -370,7 +377,7 @@ def wait_for_suggested_codes(page, expected, timeout=20000):
 
 
 def wait_for_uncoded_with_suggestions(page, expected, timeout=20000):
-    """Uncoded diagnoses stay uncoded (no invented code) but the picker offers codes."""
+    """Diagnoses written as names get a suggested code (marked as suggested) and the picker offers it."""
     page.wait_for_function(
         """(expected) => {
           const rows = [...document.querySelectorAll('[data-testid=diagnosis-row]')];
@@ -379,7 +386,7 @@ def wait_for_uncoded_with_suggestions(page, expected, timeout=20000):
             if (!row) return false;
             const own = (row.querySelector('[data-testid=diagnosis-code]')?.value || '').trim();
             const alts = [...row.querySelectorAll('[data-testid=diagnosis-code-alternatives] option')].map((o) => o.value);
-            return own === '' && alts.includes(code);
+            return own === code && row.dataset.codeSource === 'suggested' && alts.includes(code);
           });
         }""",
         arg=expected,
@@ -491,8 +498,8 @@ def test_suggested_codes_and_allergies(page):
         "Dementia": "F03.90",
     })
     rows = diagnosis_rows(page)
-    assert all(r["code"] == "" for r in rows), rows
-    # The user picks a code from the suggestions for the primary diagnosis.
+    assert all(r["badge"].startswith("suggested") for r in rows), rows
+    # The user can pick another code from the alternatives.
     page.get_by_test_id("diagnosis-code-alternatives").first.select_option("E11.9")
     expect(page.get_by_test_id("diagnosis-code").first).to_have_value("E11.9")
 
@@ -525,7 +532,7 @@ def test_suggested_codes_and_allergies(page):
     expect(page.get_by_test_id("view-detail")).to_contain_text("Rosa M. Delgado")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("E11.9")
     expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("Hypertension")
-    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("no code found")
+    expect(page.get_by_test_id("diagnoses-detail")).to_contain_text("suggested code")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("PCN")
     expect(page.get_by_test_id("allergies-detail")).to_contain_text("sulfa")
     expect(page.get_by_test_id("accept-template")).to_contain_text("Allergies: PCN")

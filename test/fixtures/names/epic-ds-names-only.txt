@@ -1,0 +1,41 @@
+Printed by MORALES, K at 11/18/2026 3:02:11 PM   Page 1 of 6
+MERCY GENERAL HOSPITAL
+Discharge Summary
+Patient: ALVAREZ, ROSA M   MRN: 88213400   DOB: 05/04/1942   Age: 84 y.o.
+Admit Date: 11/12/2026   Discharge Date: 11/19/2026
+Attending: Chen, David MD   PCP: Ruiz, Ana MD   Phone: 555-410-2201
+
+Hospital Problems/Diagnoses
+Principal Problem:
+  Acute on chronic diastolic heart failure (HCC)
+Active Problems:
+  Cellulitis of left lower leg
+  COPD exacerbation (HCC)
+  Type 2 diabetes mellitus with hyperglycemia (HCC)
+  AKI (acute kidney injury) (CMS/HCC)
+Resolved Problems:
+  No resolved hospital problems.
+
+Past Medical History:
+Diagnosis Date
+• Hypertension
+• Hyperlipidemia
+• Paroxysmal atrial fibrillation (HCC)
+• Osteoarthritis of right knee
+
+Family History
+Problem Relation Age of Onset
+• Breast cancer Mother
+• Stroke Father
+
+Review of Systems
+Denies chest pain. No history of seizures. Negative for DVT.
+
+Allergies
+Allergen Reactions
+• Penicillins Hives
+
+Assessment and Plan
+#1 Acute on chronic HFpEF – continue diuresis, daily weights
+#2 Cellulitis LLE – IV cefazolin, transition to PO
+#3 Rule out pneumonia – CXR negative

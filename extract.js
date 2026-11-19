@@ -106,7 +106,7 @@
   // ---------------------------------------------------------------------------
   // Section detection
 
-  const DX_SECTION_RE = /^(?:(?:hospital|active|current|chronic|master|patient)\s+)?problem\s*list(?:\s*\/\s*diagnos[ie]s)?|^(?:active|principal|current|chronic)\s+problems?|^principal\s+problem|^(?:(primary|principal|admitting|admission|reason\s+for\s+admission)|secondary|other|additional|discharge|final|working|active|hospital|clinical|encounter|referral)\s*(?:dx|diagnos[ie]s)|^(primary|principal|admitting)(?=\s*:)|^(?:secondary|other|additional|comorbid(?:ities)?)(?=\s*:)|^diagnos[ie]s(?:\s*\/\s*problems?)?(?:\s+(?:information|info|list|summary))?|^dx(?:\s*list)?(?=\s*[:\-–]|\s*$)|^assessment(?:\s*(?:and|&|\/)\s*plan)?|^impression(?:\s*(?:and|&|\/)\s*plan)?|^a\s*\/\s*p\b|^icd-?10(?:-?cm)?\s*(?:codes?|diagnos[ie]s)/i;
+  const DX_SECTION_RE = /^(?:(?:hospital|active|current|chronic|master|patient(?:\s+active)?)\s+)?problem\s*list(?:\s*\/\s*diagnos[ie]s)?|^(?:active\s+)?hospital\s+problems?(?:\s*\/\s*diagnos[ie]s)?|^diagnos[ie]s\s+this\s+visit|^encounter\s+diagnos[ie]s|^admit(?:ting)?\s+dx|^reason\s+for\s+(?:referral|hospitalization)|^(?:active|principal|current|chronic)\s+problems?|^principal\s+problem|^(?:(primary|principal|admitting|admission|reason\s+for\s+admission)|secondary|other|additional|discharge|final|working|active|hospital|clinical|encounter|referral)\s*(?:dx|diagnos[ie]s)|^(primary|principal|admitting)(?=\s*:)|^(?:secondary|other|additional|comorbid(?:ities)?)(?=\s*:)|^diagnos[ie]s(?:\s*\/\s*problems?)?(?:\s+(?:information|info|list|summary))?|^dx(?:\s*list)?(?=\s*[:\-–]|\s*$)|^assessment(?:\s*(?:and|&|\/)\s*plan)?|^impression(?:\s*(?:and|&|\/)\s*plan)?|^a\s*\/\s*p\b|^icd-?10(?:-?cm)?\s*(?:codes?|diagnos[ie]s)/i;
   const PMH_SECTION_RE = /^(?:past\s+medical\s+history|medical\s+history|past\s+history|pmhx?|comorbidit(?:y|ies)|chronic\s+conditions|resolved\s+problems?)\b/i;
   const ALLERGY_SECTION_RE = /^(?:(drug|medication|food|environmental|latex|known)\s+)?(?:allerg(?:y|ies|ens?)|intolerances?)(?:\s*\/\s*(?:intolerances?|adverse\s+(?:reactions?|drug\s+reactions?)))?(?:\s+(?:list|information|info|reviewed|verified))?(?:\s+as\s+of\s+[0-9\/\-]+(?:\s+[0-9:]+\s*(?:AM|PM)?)?)?(?:\s*\([^)]*\))?(?=\s*[:\-–]|\s*$)|^(environmental|latex)(?=\s*[:\-–])|^adverse\s+(?:drug\s+)?reactions?(?=\s*[:\-–]|\s*$)/i;
 
@@ -202,7 +202,9 @@
         out.push({ line: "", section, meta, blank: true });
         continue;
       }
-      const header = detectHeader(trimmed);
+      let header = detectHeader(trimmed);
+      // A "Diagnosis | Date" table header inside past medical history stays history.
+      if (header && header.table && section === "pmh") header = Object.assign({}, header, { section: "pmh" });
       if (header) {
         section = header.section;
         meta = header;
@@ -366,6 +368,169 @@
     return false;
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Forgiving passes: whole-document codes and diagnosis names.
+
+  const DxNames = (typeof module === "object" && module.exports && typeof require === "function")
+    ? require("./dxnames.js")
+    : (typeof globalThis !== "undefined" ? globalThis.AdmissionsDxNames : null);
+
+  // Sections never read for diagnoses in the forgiving passes.
+  const NEVER_DX_SECTIONS = new Set(["contacts", "insurance", "meds", "allergy", "isolation", "history"]);
+  // Light line filter for the forgiving passes: contact, payer and ID lines.
+  const CONTACT_LINE_RE = /\b(?:subscriber|guarantor|payer|payor|insurance|medicaid|medicare|member\s*(?:id|#)|policy|group\s*(?:#|no|number|:)|relation(?:ship)?|emergency\s+contact|next\s+of\s+kin|mobile|cell|home\s+phone|work\s+phone|phone|fax|npi|mrn|acct|account|address|printed\s+(?:by|on)|electronically\s+signed|signed\s+by|csn|fin\s*[:#])\b/i;
+  const NEG_LINE_RE = /\b(?:family\s+history|fhx|review\s+of\s+systems|ros\s*:|discharge\s+instructions|return\s+to\s+(?:the\s+)?(?:er|ed)|call\s+(?:your|if))\b/i;
+
+  function contactLine(line) {
+    return CONTACT_LINE_RE.test(line) || PHONE_RE.test(line);
+  }
+
+  const OCR_FIRST_CHAR = { "1": "I", "0": "O", "5": "S", "8": "B", "2": "Z", "l": "I", "|": "I", "6": "G" };
+
+  // Code-like tokens, dotted or not: L03.116, L03116, (I10), [E11.9], 110 (OCR for I10).
+  const LOOSE_CODE_RE = /(^|[^A-Za-z0-9.])([A-Za-z0-9|][0-9OoIlS|][0-9A-Za-z](?:\.?[0-9A-Za-z]{1,4})?)(?=$|[^A-Za-z0-9])/g;
+
+  function codeVariants(tok) {
+    const t = String(tok || "").replace(/\s+/g, "");
+    const out = [];
+    const push = (v, repaired) => {
+      const code = normalizeIcd10Code(v);
+      if (code && !out.some((o) => o.code === code)) out.push({ code, repaired });
+    };
+    push(t, false);
+    const body = t.replace(".", "");
+    const first = OCR_FIRST_CHAR[body[0]] || body[0].toUpperCase();
+    const second = body.slice(1, 2).replace(/[Oo]/, "0").replace(/[Il|]/, "1").replace(/S/, "5");
+    const third = body.slice(2, 3).replace(/[Oo]/, "0").replace(/[l|]/, "1");
+    const rest = body.slice(3).replace(/[Oo]/g, "0").replace(/[Il|]/g, "1");
+    push(first + second + third + rest, true);
+    return out;
+  }
+
+  function scanCodeTokens(line) {
+    const found = [];
+    LOOSE_CODE_RE.lastIndex = 0;
+    let m;
+    while ((m = LOOSE_CODE_RE.exec(line))) {
+      const tok = m[2];
+      const index = m.index + m[1].length;
+      found.push({ tok, index, end: index + tok.length });
+    }
+    return found;
+  }
+
+  function tokenRejectReason(line, t, lookup, opts) {
+    const before = line.slice(0, t.index);
+    const after = line.slice(t.end);
+    const prevCh = line.charAt(t.index - 1);
+    if (/[:\-\/]/.test(prevCh) && /\d/.test(line.charAt(t.index - 2))) return "part of a date, time or number";
+    if (/^[:\-\/]\d/.test(after) || (/^:/.test(after) && /^\d/.test(t.tok))) return "part of a date, time or number";
+    if (/\d[\s\-]*$/.test(before) && /^\s*\d/.test(after)) return "part of a longer number";
+    if (/\d{3}\s*$/.test(before) || /^\s*\d{3,4}\b/.test(after)) return "next to a phone or ID number";
+    if (LEFT_CONTEXT_RE.test(before)) return "follows a room, lab, dose or ID label";
+    const variants = codeVariants(t.tok);
+    if (!variants.length) return "not shaped like an ICD-10 code";
+    const v = variants.find((x) => lookup(x.code));
+    if (!v) return "not in the ICD-10-CM list";
+    const compact = compactKey(v.code);
+    if (FALSE_POSITIVE_CODES.has(compact) || FREQ_CODE_RE.test(compact)) return "common non-code abbreviation (e.g. B12, Q4H)";
+    // A token that only becomes a code after OCR repair must sit next to words
+    // that match the official description (so "room 110" never becomes I10).
+    if (v.repaired && !/^[A-Za-z]/.test(t.tok)) {
+      const off = new Set(contentTokens(lookup(v.code).description));
+      const words = contentTokens(line.replace(t.tok, " "));
+      if (!words.some((w) => off.has(w))) return "number only matches a code after OCR repair, and no matching words nearby";
+    }
+    if (opts && opts.timeLine && !t.tok.includes(".")) return "line has a time stamp";
+    return "";
+  }
+
+  function wholeDocCodes(rows, lookup) {
+    const out = [];
+    for (const row of rows) {
+      if (row.blank) continue;
+      const line = row.header ? (row.header.remainder || "") : row.line;
+      if (!line || NEVER_DX_SECTIONS.has(row.section)) continue;
+      if (contactLine(line)) continue;
+      const timeLine = TIME_RE.test(line);
+      for (const t of scanCodeTokens(line)) {
+        if (tokenRejectReason(line, t, lookup, { timeLine })) continue;
+        const v = codeVariants(t.tok).find((x) => lookup(x.code));
+        const official = lookup(v.code);
+        if (out.some((o) => o.code === official.code)) continue;
+        out.push({
+          code: official.code,
+          description: official.description,
+          sourceText: cleanDxText(lineWithoutCodes(line, [t])),
+          primary: false,
+          codeStatus: official.billable === false ? "nonbillable" : "valid",
+          codeSource: "found",
+          verified: true,
+          fromSection: "document",
+        });
+      }
+    }
+    return out;
+  }
+
+  function nameItem(m, docText, section) {
+    return {
+      code: m.code,
+      description: docText,
+      officialDescription: m.description,
+      sourceText: docText,
+      primary: false,
+      codeStatus: m.billable === false ? "nonbillable" : "valid",
+      codeSource: "suggested",
+      verified: true,
+      suggestions: [{ code: m.code, description: m.description, billable: m.billable }].concat(m.alternatives || []),
+      fromSection: section,
+    };
+  }
+
+  function wholeDocNames(rows, lookup) {
+    const out = [];
+    for (const row of rows) {
+      if (row.blank) continue;
+      const line = row.header ? (row.header.remainder || "") : row.line;
+      if (!line || NEVER_DX_SECTIONS.has(row.section)) continue;
+      if (contactLine(line) || NEG_LINE_RE.test(line)) continue;
+      if (row.section === "surgical" && !/\b(?:s\/p|status\s+post|amputation|arthroplasty|replacement|tka|tha|bka|aka)\b/i.test(line)) continue;
+      for (const m of DxNames.match(line, { lookup })) {
+        if (m.negated) continue;
+        if (out.some((o) => o.code === m.code)) continue;
+        out.push(nameItem(m, cleanDxText(m.matchText), row.section === "none" ? "document" : row.section));
+        if (out.length >= 15) return out;
+      }
+    }
+    return out;
+  }
+
+  function explainCodes(rows, lookup, keptCodes) {
+    const list = [];
+    for (const row of rows) {
+      if (row.blank) continue;
+      const line = row.header ? (row.header.remainder || "") : row.line;
+      if (!line) continue;
+      for (const t of scanCodeTokens(line)) {
+        // Skip plain words and numbers that are not even close to a code.
+        if (!/^[A-Za-z][0-9]/.test(t.tok) && !codeVariants(t.tok).some((v) => lookup && lookup(v.code))) continue;
+        const variants = codeVariants(t.tok);
+        const v = lookup ? variants.find((x) => lookup(x.code)) : variants[0];
+        const code = v ? v.code : t.tok;
+        let reason = "";
+        if (keptCodes.has(code)) reason = "";
+        else if (NEVER_DX_SECTIONS.has(row.section) || BLOCKED_SECTIONS.has(row.section)) reason = `in the ${row.section} section`;
+        else if (contactLine(line)) reason = "contact, payer or ID line";
+        else reason = lookup ? (tokenRejectReason(line, t, lookup, { timeLine: TIME_RE.test(line) }) || "outside a diagnosis section") : "code list not loaded";
+        list.push({ token: t.tok, code, section: row.section, line: line.slice(0, 120), kept: keptCodes.has(code), reason });
+        if (list.length >= 80) return list;
+      }
+    }
+    return list;
+  }
+
   /**
    * opts.lookup(code) -> { code, description, billable } | null
    * When a lookup is supplied (the bundled CMS list), codes not in the list are
@@ -394,6 +559,7 @@
         codeStatus: official ? (official.billable === false ? "nonbillable" : "valid") : "",
         codeSource: "found",
         verified: !!official,
+        fromSection: row.section,
       });
       return true;
     };
@@ -433,6 +599,8 @@
     const handleContent = (content, row, opts2) => {
       let isPrimaryLine = !!opts2.isPrimaryLine;
       const section = row.section;
+      // "#1 Acute on chronic HFpEF – continue diuresis": the problem is before the dash.
+      if (section === "assessment") content = content.replace(/^\s*#\s*\d+[.):]?\s*/, "").replace(/\s+[–—-]\s+.*$/, "");
       const inDx = section === "dx" || section === "pmh" || section === "assessment";
       if (BLOCKED_SECTIONS.has(section)) return;
       const lineNonClinical = isNonClinicalLine(content);
@@ -513,6 +681,72 @@
       freeSeen.add(k);
       out.push(f);
     }
+    // Name to code: diagnoses written as names get a suggested code.
+    const trace = opts && opts.trace;
+    if (lookup && DxNames) {
+      const extra = [];
+      for (const d of out) {
+        if (d.code || !d.description) continue;
+        const all = DxNames.match(d.description, { lookup });
+        const hits = all.filter((m) => !m.negated);
+        if (!hits.length && all.length) { d._drop = true; continue; } // "Rule out pneumonia"
+        if (hits.length) {
+          const first = hits[0];
+          Object.assign(d, nameItem(first, d.description, d.fromSection), { primary: d.primary });
+          for (const h of hits.slice(1)) extra.push(nameItem(h, cleanDxText(h.matchText), d.fromSection));
+        } else if (opts && typeof opts.suggest === "function") {
+          const fuzzy = opts.suggest(d.description, { limit: 5 }) || [];
+          const top = fuzzy[0];
+          if (top && (top.why === "preferred" || top.why === "exact" || top.score >= 120)) {
+            Object.assign(d, nameItem({ code: top.code, description: top.description, billable: top.billable, alternatives: fuzzy.slice(1) }, d.description, d.fromSection), { primary: d.primary });
+          }
+        }
+      }
+      for (const e of extra) if (!out.some((o) => o.code === e.code)) out.push(e);
+      // In Assessment & Plan, plain text that is not a known diagnosis is plan text.
+      for (let i = out.length - 1; i >= 0; i--) if (out[i]._drop || (out[i].fromSection === "assessment" && !out[i].code)) out.splice(i, 1);
+    }
+    // Nothing coded in the diagnosis sections: look for real codes anywhere
+    // (except contact, payer, medication and allergy lines), then names.
+    let fallback = "";
+    const hasDxSection = rows.some((r) => r.header && (r.header.section === "dx" || r.header.section === "pmh" || r.header.section === "assessment"));
+    if (lookup && (!out.some((d) => d.code) || !hasDxSection)) {
+      const docCodes = wholeDocCodes(rows, lookup).filter((c) => !out.some((o) => o.code === c.code));
+      if (docCodes.length) {
+        fallback = "codes";
+        for (const c of docCodes) out.push(c);
+      } else if (DxNames && !out.some((d) => d.code)) {
+        const names = wholeDocNames(rows, lookup);
+        if (names.length) fallback = "names";
+        for (const n of names) out.push(n);
+      }
+    }
+    // Drop exact duplicates by code (a name and a printed code for the same thing).
+    {
+      const seenCodes = new Map();
+      for (let i = 0; i < out.length; i++) {
+        const d = out[i];
+        if (!d.code) continue;
+        const k = compactKey(d.code);
+        if (seenCodes.has(k)) {
+          const keep = seenCodes.get(k);
+          if (d.primary) keep.primary = true;
+          if (keep.codeSource === "suggested" && d.codeSource === "found") Object.assign(keep, d, { primary: keep.primary });
+          out.splice(i, 1); i--;
+        } else seenCodes.set(k, d);
+      }
+    }
+    // Rank: primary, then diagnosis sections, assessment, history, rest of the document.
+    const RANK = { dx: 0, assessment: 1, pmh: 2 };
+    out.forEach((d, i) => { d._order = i; });
+    out.sort((a, b) => ((RANK[a.fromSection] ?? 3) - (RANK[b.fromSection] ?? 3)) || a._order - b._order);
+    if (!out.some((d) => d.primary) && out.length && out[0].fromSection === "dx" && out.filter((d) => d.fromSection === "dx").length === 1) out[0].primary = true;
+    if (trace) {
+      trace.sections = rows.filter((r) => r.header).map((r) => ({ line: String(r.header.label || r.line).slice(0, 60), section: r.header.section }));
+      trace.codes = explainCodes(rows, lookup, new Set(out.filter((d) => d.codeSource === "found").map((d) => d.code)));
+      trace.fallback = fallback;
+      trace.names = out.filter((d) => d.codeSource === "suggested").map((d) => ({ text: d.description, code: d.code, section: d.fromSection }));
+    }
     // Primary first, exactly one primary at most.
     let primaryKept = false;
     for (const d of out) {
@@ -526,6 +760,9 @@
       if (d.codeStatus) item.codeStatus = d.codeStatus;
       if (d.codeSource) item.codeSource = d.codeSource;
       if (d.verified) item.verified = true;
+      if (d.officialDescription) item.officialDescription = d.officialDescription;
+      if (Array.isArray(d.suggestions) && d.suggestions.length) item.suggestions = d.suggestions;
+      if (d.fromSection) item.fromSection = d.fromSection;
       return item;
     });
   }
@@ -721,9 +958,14 @@
     let typeHint = "";
     let blockEnded = false;
     let strayLines = 0;
+    let sawNotOnFile = false;
+    // Epic prints "Not on File" when allergies were never documented. That is
+    // not NKDA: the status is unknown and must be confirmed.
+    const NOT_ON_FILE_RE = /^(?:allergies\s*:?\s*)?(?:not\s+on\s+file|none\s+on\s+file|no\s+allergies\s+on\s+file|patient\s+has\s+no\s+allergies\s+on\s+file|not\s+(?:documented|recorded|assessed|obtained)|unknown|unable\s+to\s+(?:obtain|assess))\.?$/i;
 
     const addFrom = (raw, hint) => {
       if (!raw) return;
+      if (NOT_ON_FILE_RE.test(String(raw).trim())) { sawNotOnFile = true; return; }
       const kv = parseAllergyKeyValue(raw, hint);
       if (kv !== undefined) { if (kv) items.push(kv); return; }
       if (isNkdaText(raw)) { sawNkda = true; return; }
@@ -784,6 +1026,7 @@
     }
     if (unique.length) return { status: "listed", items: unique };
     if (sawNkda) return { status: "nkda", items: [] };
+    if (sawNotOnFile) return { status: "unknown", items: [], sectionFound: sawSection, notOnFile: true };
     return { status: "unknown", items: [], sectionFound: sawSection };
   }
 

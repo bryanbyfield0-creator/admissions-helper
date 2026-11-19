@@ -11,6 +11,7 @@ from e2e import BASE, ROOT, start_server, sync_playwright, expect, diagnosis_row
 FAX = ROOT / "test" / "fixtures" / "epic" / "epic-cellulitis-fax-stamped.pdf"
 TEXT_PDF = ROOT / "test" / "sample-referral.pdf"
 BLANKISH = ROOT / "test" / "fixtures" / "nothing-to-find.txt"
+NOTHING_LONG = ROOT / "test" / "fixtures" / "nothing-to-find-long.txt"
 MULTI = ROOT / "test" / "fixtures" / "epic" / "multi-6page-scan.pdf"  # 2 + 1 + 1 + 2 scanned pages, read in parallel
 
 
@@ -88,9 +89,25 @@ def run(browser, engine):
     }""")
     expect(page.get_by_test_id("dash-import-error")).to_contain_text("did not come through as a file")
 
-    # 5. A readable file with nothing to fill in shows a clear message.
+    # 5a. Very little text: says it may be a low-quality scan, and "Show what it read" shows the text.
     page.get_by_test_id("dash-file-input").set_input_files(str(BLANKISH))
+    expect(page.get_by_test_id("pdf-error")).to_contain_text("Couldn't read much text from this file", timeout=30000)
+    report = page.get_by_test_id("read-report")
+    expect(report).to_be_visible()
+    expect(page.get_by_test_id("read-report-text")).to_be_hidden()
+    page.locator("#read-report-toggle").click()
+    rt = page.get_by_test_id("read-report-text")
+    expect(rt).to_be_visible()
+    expect(rt).to_contain_text("Characters read:")
+    expect(rt).to_contain_text("Thanks for the call today.")
+    expect(rt).to_contain_text("Sections found (0)")
+    expect(page.locator("#read-report-copy")).to_be_visible()
+    page.get_by_test_id("cancel-referral-btn").click()
+
+    # 5b. Plenty of readable text but nothing to fill in: a clear message.
+    page.get_by_test_id("dash-file-input").set_input_files(str(NOTHING_LONG))
     expect(page.get_by_test_id("pdf-error")).to_contain_text("Nothing could be filled in", timeout=30000)
+    expect(page.get_by_test_id("read-report")).to_be_visible()
     page.get_by_test_id("cancel-referral-btn").click()
 
     # 6. Several scanned pages are read in parallel; every page keeps its own text, in order.

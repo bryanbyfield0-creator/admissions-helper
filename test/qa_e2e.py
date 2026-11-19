@@ -54,7 +54,7 @@ def scanned_epic(page):
     codes = sorted(r["code"] for r in rows if r["code"])
     assert codes == ["E11.9", "F41.9", "I10", "L03.116"], rows
     free = [r["description"] for r in rows if not r["code"]]
-    assert free == ["Concern for MRSA"], rows
+    assert free == [], rows  # "Concern for MRSA" in the plan is not a diagnosis
     assert next(r for r in rows if r["code"] == "L03.116")["description"] == "Cellulitis of left lower limb"
     assert next(r for r in rows if r["code"] == "L03.116")["primary"] is True
     allergens = [(a["allergen"], a["reaction"]) for a in allergy_rows(page)]
@@ -111,8 +111,10 @@ def nkda_case(page):
     expect(page.get_by_test_id("allergies-banner")).to_contain_text("verify")
     wait_rows(page, 2)
     rows = diagnosis_rows(page)
-    assert sorted(r["code"] for r in rows if r["code"]) == ["I50.33", "N18.31"], rows
-    assert sorted(r["description"] for r in rows if not r["code"]) == ["Atrial fibrillation", "Generalized weakness", "Hypothyroidism"], rows
+    found = sorted(r["code"] for r in rows if r["badge"] == "from referral")
+    assert found == ["I50.33", "N18.31"], rows
+    suggested = {r["description"]: r["code"] for r in rows if r["badge"].startswith("suggested")}
+    assert suggested == {"Atrial fibrillation": "I48.91", "Generalized weakness": "M62.81", "Hypothyroidism": "E03.9"}, rows
     assert_no_junk(page, "nkda")
     page.get_by_test_id("save-referral-btn").click()
     expect(page.get_by_test_id("view-detail")).to_contain_text("Evelyn Joan Pruitt")

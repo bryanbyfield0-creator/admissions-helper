@@ -461,16 +461,17 @@
     const limit = options.limit || 5;
     return (diagnoses || []).map((d) => {
       const next = Object.assign({}, d);
-      const suggestions = [];
+      // Keep alternatives already chosen for a suggested code (from the curated list).
+      const suggestions = next.codeSource === "suggested" && Array.isArray(d.suggestions) ? d.suggestions.slice() : [];
       if (next.code) {
         const v = validate(next.code);
         next.code = v.code || next.code;
         next.codeSource = next.codeSource || "found";
         next.codeStatus = v.status;
         if (v.description && !next.officialDescription) next.officialDescription = v.description;
-        if (v.status === "nonbillable" || v.status === "invalid") {
+        if (v.status === "nonbillable" || v.status === "invalid" || next.codeSource === "suggested") {
           const from = suggest(next.description || next.code, { limit });
-          for (const hit of from) suggestions.push(hit);
+          for (const hit of from) if (!suggestions.some((x) => x.code === hit.code)) suggestions.push(hit);
         }
       } else if (next.description) {
         const from = suggest(next.description, { limit });

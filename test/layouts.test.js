@@ -10,7 +10,7 @@ const DIR = path.join(__dirname, "fixtures", "layouts");
 const CASES = {
   "cerner-discharge.txt": { codes: ["I50.33", "N18.31", "I48.0", "E11.65"], primary: "I50.33", allergies: ["codeine", "latex"], hospital: "Riverside Regional Medical Center" },
   "meditech.txt": { codes: ["S72.001A", "M81.0", "F03.90"], allergies: ["morphine", "bactrim"] },
-  "fax-cover-hp.txt": { codes: ["I63.9", "R13.12", "E78.5"], nkda: true, notHospital: /problems/i },
+  "fax-cover-hp.txt": { codes: ["I63.9", "R13.12", "E78.5", "I10", "K21.9"], nkda: true, notHospital: /problems/i },
   "facesheet-only.txt": { codes: ["J69.0", "J96.01", "G20.A1"], primary: "J69.0", nkda: true, hospital: "Valley Medical Center" },
   "icd-inline.txt": { codes: ["L89.154", "A41.9"], allergies: ["vancomycin"] },
   "no-headers.txt": { codes: ["J44.1", "I50.9", "E11.9"] },

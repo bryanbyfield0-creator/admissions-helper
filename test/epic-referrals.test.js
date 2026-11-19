@@ -51,7 +51,7 @@ const EXPECT = {
     name: "Mateo Andres Delacruz", dob: "1959-06-02", hospital: "Northvale Regional Medical Center",
     payer: "medicaid", dateReceived: "", expectedAdmitDate: "",
     codes: ["L03.116", "I10", "E11.9", "F41.9"], primary: "L03.116",
-    free: ["Concern for MRSA"],
+    free: [],
     allergyStatus: "listed",
     allergies: [["Penicillins", "hives"], ["Sulfa (Sulfonamide Antibiotics)", "rash"], ["Lisinopril", "swelling"]],
     needs: ["pt", "ot", "wound", "iv", "isolation"],
@@ -61,6 +61,7 @@ const EXPECT = {
     payer: "medicare", dateReceived: "", expectedAdmitDate: "",
     codes: ["I50.33", "N18.31"], primary: null,
     free: ["Atrial fibrillation", "Hypothyroidism", "Generalized weakness"],
+    suggested: { "Atrial fibrillation": "I48.91", "Hypothyroidism": "E03.9", "Generalized weakness": "M62.81" },
     allergyStatus: "nkda", allergies: [],
     needs: [],
   },
@@ -69,6 +70,7 @@ const EXPECT = {
     payer: "mco", dateReceived: "", expectedAdmitDate: "",
     codes: ["S72.001A", "F03.90", "J44.9"], primary: null,
     free: ["History of falling"],
+    suggested: { "History of falling": "Z91.81" },
     allergyStatus: "listed",
     allergies: [["Codeine", "nausea and vomiting", "moderate"], ["Morphine", "itching", "mild"], ["Aspirin", ""], ["Latex", "anaphylaxis", "life-threatening"]],
     needs: ["isolation"],
@@ -86,7 +88,8 @@ const EXPECT = {
     name: "Robert T. Nguyen", dob: "1945-12-01", hospital: "Harbor View Hospital",
     payer: "medicare-medicaid", dateReceived: "2026-11-18", expectedAdmitDate: "2026-11-19",
     codes: [], primary: null,
-    free: ["Sepsis due to UTI", "acute kidney injury", "Type 2 diabetes mellitus"],
+    free: ["Sepsis due to UTI", "acute kidney injury", "Type 2 diabetes mellitus", "UTI"],
+    suggested: { "Sepsis due to UTI": "A41.9", "acute kidney injury": "N17.9", "Type 2 diabetes mellitus": "E11.9", "UTI": "N39.0" },
     allergyStatus: "nkda", allergies: [],
     needs: ["pt", "ot", "iv"],
   },
@@ -125,14 +128,20 @@ function checkExpected(fields, exp, label, { ocr = false } = {}) {
   assert.strictEqual(fields.payer, exp.payer, `${label}: payer`);
   assert.strictEqual(fields.dateReceived, exp.dateReceived, `${label}: date received`);
   assert.strictEqual(fields.expectedAdmitDate, exp.expectedAdmitDate, `${label}: expected admit`);
-  const codes = fields.diagnoses.filter((d) => d.code).map((d) => d.code);
+  // Codes printed in the referral ("found") vs codes suggested from a diagnosis name.
+  const codes = fields.diagnoses.filter((d) => d.code && d.codeSource !== "suggested").map((d) => d.code);
   assert.deepStrictEqual(codes.slice().sort(), exp.codes.slice().sort(), `${label}: codes ${codes.join(", ")}`);
-  const free = fields.diagnoses.filter((d) => !d.code).map((d) => d.description);
+  const free = fields.diagnoses.filter((d) => !d.code || d.codeSource === "suggested").map((d) => d.description);
+  if (exp.suggested) {
+    const sug = {};
+    for (const d of fields.diagnoses.filter((x) => x.codeSource === "suggested")) sug[d.description] = d.code;
+    assert.deepStrictEqual(sug, exp.suggested, `${label}: suggested codes ${JSON.stringify(sug)}`);
+  }
   assert.deepStrictEqual(free.slice().sort(), exp.free.slice().sort(), `${label}: free-text dx ${JSON.stringify(free)}`);
   const primary = fields.diagnoses.find((d) => d.primary);
   if (exp.primary) assert.strictEqual(primary && primary.code, exp.primary, `${label}: primary`);
   // Coded items show the official CMS description, not surrounding text.
-  for (const d of fields.diagnoses.filter((x) => x.code)) {
+  for (const d of fields.diagnoses.filter((x) => x.code && x.codeSource !== "suggested")) {
     const official = icd.lookup(d.code);
     assert.ok(official, `${label}: ${d.code} not in CMS list`);
     assert.strictEqual(d.description, official.description, `${label}: ${d.code} description`);
@@ -175,7 +184,8 @@ function checkExpected(fields, exp, label, { ocr = false } = {}) {
   await test("without the code list, unverifiable codes outside diagnosis sections are dropped", () => {
     const fields = extract.extractFields(read("epic-cellulitis.txt"));
     assertNoJunk(fields, "no-lookup");
-    const codes = fields.diagnoses.filter((d) => d.code).map((d) => d.code);
+    // Codes printed in the referral ("found") vs codes suggested from a diagnosis name.
+  const codes = fields.diagnoses.filter((d) => d.code && d.codeSource !== "suggested").map((d) => d.code);
     assert.deepStrictEqual(codes.sort(), ["E11.9", "F41.9", "I10", "L03.116"]);
   });
 

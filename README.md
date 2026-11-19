@@ -10,8 +10,10 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 
 - Log a referral (name or initials, date of birth, hospital, diagnoses with ICD-10 codes, allergies, payer, care needs, and notes)
 - Drop a referral PDF, Word file (.docx), text, or a photo (JPG, PNG, or HEIC) onto the dashboard, or paste email text, then check the filled-in fields before you save. Every item filled in from a referral is marked **Please verify** until you edit or confirm it, and each list has a **Clear all** button. Anything the tracker is not sure about is left blank instead of guessed.
-  - **Diagnoses** are read only from diagnosis, problem list, medical history and assessment sections. A code is kept only if it is in the official CMS ICD-10-CM code set (bundled with the app), and the official description is shown. Codes in contacts, insurance, provider, isolation and timestamp lines are ignored. Diagnoses listed without a code stay uncoded; suggested codes are offered in a picker but never filled in for you.
-  - **Allergies** are read only from the allergy section, up to the next section. NKDA / NKA / “No known allergies” is shown as NKDA. A reaction is filled in only when the referral names one (rash, hives, swelling, and so on). If no allergy section is found, the form says “None found — check the file.”
+  - **Diagnoses** are read only from diagnosis, problem list, medical history and assessment sections. A code is kept only if it is in the official CMS ICD-10-CM code set (bundled with the app), and the official description is shown. Codes in contacts, insurance, provider, isolation and timestamp lines are ignored. Codes are also found without a dot (I509), in brackets, after “ICD-10:” / “Dx:”, and with common scan mix-ups fixed (O/0, I/l/1, S/5). If the sections hold no codes, the whole document is checked.
+  - **Diagnosis names to codes:** many referrals (Epic discharge summaries especially) list only names. About 350 common skilled-nursing diagnoses and abbreviations (CHF, COPD, AKI, UTI, s/p TKA, hip fracture, and so on) are turned into a **suggested code – please verify**, with the most specific code when the side is written (left/right/bilateral) and other choices in a dropdown. Negated, ruled-out and family-history mentions (“denies”, “no history of”, “r/o”, “mother had”) are skipped. Problem list and diagnosis sections are searched first, then the whole document.
+  - **Show what it read:** after every import a button opens what the app read: the text of each page (text layer or OCR), character counts, the sections it recognized, and each code-like item kept or skipped and why. A Copy button copies it (cover patient details before sharing). It never leaves the device. If very little text came through, the app says the file may be a low-quality scan.
+  - **Allergies** are read only from the allergy section, up to the next section. NKDA / NKA / “No known allergies” is shown as NKDA. Epic's “Not on File” is shown as “Allergy status unknown – confirm”, not NKDA. A reaction is filled in only when the referral names one (rash, hives, swelling, and so on). If no allergy section is found, the form says “None found — check the file.”
   - Image-only scanned PDFs, faxed PDFs (a scanned picture with only a fax header as real text) and photos are read on this device with OCR. Pages that already have real text are not OCR'd. Several scanned pages are read at once, and the reader starts loading in the background when the page opens.
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
@@ -47,7 +49,7 @@ pdf.js (Apache License 2.0) is included locally to read PDF text and to render s
 ## Tests
 
 ```
-for t in test/*.test.js; do node "$t"; done   # parser, allergy, ICD-10 and synthetic-referral tests
+for t in test/*.test.js; do node "$t"; done   # parser, allergy, ICD-10, name-to-code, layout and synthetic-referral tests
 python3 test/e2e.py && python3 test/qa_e2e.py && python3 test/ocr_e2e.py && python3 test/upload_e2e.py   # browser tests (Playwright; upload tests run in Chromium and WebKit)
 node scripts/compare-before-after.js           # item counts before vs after the parser rewrite
 ```

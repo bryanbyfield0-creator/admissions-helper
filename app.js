@@ -529,7 +529,7 @@
     let label = "";
     if (d.codeStatus === "invalid") { cls = "dx-badge-invalid"; label = "not in ICD-10-CM – verify"; }
     else if (d.codeStatus === "nonbillable") { cls = "dx-badge-nonbillable"; label = "not billable – verify"; }
-    else if (d.codeSource === "suggested") { cls = "dx-badge-suggested"; label = "suggested – verify"; }
+    else if (d.codeSource === "suggested") { cls = "dx-badge-suggested"; label = "suggested code – please verify"; }
     else if (d.codeSource === "found") { cls = "dx-badge-found"; label = "from referral"; }
     if (!label) return "";
     const idAttr = testId ? ` data-testid="${testId}"` : "";
@@ -1061,6 +1061,8 @@
 
   let allergiesFromFile = false;
 
+  let allergiesNotOnFile = false;
+
   function updateAllergiesBanner(status) {
     const banner = $("#allergies-banner");
     if (!banner) return;
@@ -1076,7 +1078,9 @@
       banner.textContent = "Allergies are safety-critical. Check every item against the referral before you save or admit.";
     } else {
       banner.classList.add("allergy-banner-unknown");
-      banner.textContent = allergiesFromFile
+      banner.textContent = allergiesFromFile && allergiesNotOnFile
+        ? "Allergy status unknown – confirm. The referral says allergies are “Not on File”, which means nobody documented them. It does not mean NKDA."
+        : allergiesFromFile
         ? "None found — check the file. No allergy list was found in this referral, so nothing was filled in. Confirm allergies with the hospital before admission."
         : "Allergies have not been recorded yet. Add each allergy, or tick NKDA if the patient has none.";
     }
@@ -1088,6 +1092,7 @@
     if (!box) return;
     allergiesFromFile = !!fromFile;
     const data = allergies || { status: "unknown", items: [] };
+    allergiesNotOnFile = !!(fromFile && data.notOnFile);
     box.innerHTML = "";
     if (nkda) nkda.checked = data.status === "nkda";
     if (data.status === "listed" && data.items && data.items.length) {
@@ -1248,8 +1253,11 @@
     if (alrgLegend) alrgLegend.classList.toggle("from-pdf", filledFromPdf.has("allergies"));
   }
 
+  let lastReport = null;
+
   function openReferralForm(editId) {
     populateSelects();
+    showReadReport(null);
     if (editId) {
       const r = findReferral(editId);
       if (r) fillForm(r);
@@ -1584,8 +1592,10 @@
   }
 
   const TEXT_LAYER_MIN_CHARS = 40;
+  // About 300 DPI for a letter page (Tesseract's recommended minimum).
   const OCR_MAX_EDGE = 2000;
   const OCR_PDF_SCALE_CAP = 2.2;
+  let lastReadPages = null;
 
   function significantCharCount(text) {
     return (String(text || "").match(/[A-Za-z0-9]/g) || []).length;
@@ -1840,6 +1850,7 @@
     const total = doc.numPages;
     // Pass 1: the real text layer of every page (fast), and which pages are scans.
     const pageTexts = new Array(total).fill("");
+    const pageMethods = new Array(total).fill("text layer");
     const needOcr = [];
     for (let i = 1; i <= total; i++) {
       await emitProgress(onProgress, "Reading page " + i + " of " + total + "...");
@@ -1879,6 +1890,7 @@
           try {
             canvas = await renderInTurn(page);
             const ocrText = await ocrCanvas(canvas, onProgress, "", worker);
+            pageMethods[i - 1] = significantCharCount(pageTexts[i - 1]) ? "text layer + OCR (scanned page with a text stamp)" : "OCR (scanned page)";
             pageTexts[i - 1] = [pageTexts[i - 1], ocrText].filter(Boolean).join("\n").trim();
           } finally {
             releaseCanvas(canvas);
@@ -1894,6 +1906,7 @@
         scheduleExtraWorkerShutdown();
       }
     }
+    lastReadPages = pageTexts.map((text, i) => ({ n: i + 1, method: pageMethods[i], text }));
     return pageTexts.filter(Boolean).join("\n\n").trim();
   }
 
@@ -1954,6 +1967,7 @@
       await emitProgress(onProgress, "Reading scanned photo...");
       canvas = await rasterFromImageFile(file);
       const text = await ocrCanvas(canvas, onProgress, "Reading scanned photo...");
+      lastReadPages = [{ n: 1, method: "OCR (photo)", text }];
       if (!text) {
         throw new Error("No readable text was found in this photo. Handwriting and very blurry photos may not be readable. Enter the details by hand.");
       }
@@ -2032,12 +2046,111 @@
     expectedAdmitDate: "referral-expected-admit",
   };
 
-  async function applyExtractedText(text, sourceName, toastMessage, where) {
+  // Letters and digits outside fax stamps, page footers and time stamps.
+  function bodyCharCount(text) {
+    return String(text || "").split(/\n/).filter((l) => !/\bpage\s+\d+\s*(?:of|\/)\s*\d+\b|\bprinted\s+(?:by|on)\b|\bfax\b|\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b/i.test(l))
+      .reduce((n, l) => n + significantCharCount(l), 0);
+  }
+
+
+  const SECTION_NAMES = {
+    dx: "diagnoses / problem list", pmh: "past medical history", assessment: "assessment & plan", allergy: "allergies",
+    meds: "medications (not read for diagnoses)", contacts: "contacts (not read)", insurance: "insurance (not read)",
+    providers: "care team", encounter: "encounter / face sheet", isolation: "isolation (not read for diagnoses)",
+    history: "family / social history (not read for diagnoses)", surgical: "surgical history", clinical: "clinical notes", other: "other heading",
+  };
+
+  function buildReadReport(r) {
+    const n = (x) => Number(x || 0).toLocaleString("en-US");
+    const lines = [];
+    lines.push(`WHAT THE APP READ — ${r.sourceName || "file"}`);
+    lines.push("Read on this device. Nothing was sent anywhere.");
+    lines.push(`Characters read: ${n(r.text.length)} (letters and numbers: ${n(significantCharCount(r.text))}; outside fax stamps and page footers: ${n(bodyCharCount(r.text))})`);
+    const pages = r.pages || [];
+    lines.push(`Pages: ${pages.length}`);
+    for (const p of pages) lines.push(`  Page ${p.n}: ${p.method}, ${n(significantCharCount(p.text))} letters and numbers`);
+    const tr = r.trace || {};
+    const secs = tr.sections || [];
+    lines.push("");
+    lines.push(`Sections found (${secs.length}):`);
+    if (!secs.length) lines.push("  none — no headings like “Diagnoses”, “Problem List” or “Allergies” were recognized");
+    for (const s of secs.slice(0, 60)) lines.push(`  “${s.line}” → ${SECTION_NAMES[s.section] || s.section}`);
+    const dx = (r.fields && r.fields.diagnoses) || [];
+    lines.push("");
+    lines.push(`Diagnoses filled in (${dx.length}):`);
+    for (const d of dx) {
+      const how = d.codeSource === "suggested" ? "suggested code from the name" : d.code ? "code printed in the referral" : "no code";
+      lines.push(`  ${d.code || "—"}  ${d.description}  [${how}${d.fromSection ? "; " + (SECTION_NAMES[d.fromSection] || d.fromSection) : ""}]${d.primary ? " PRIMARY" : ""}`);
+    }
+    if (tr.fallback === "codes") lines.push("  (No codes in a diagnosis section, so codes were looked for in the whole document.)");
+    if (tr.fallback === "names") lines.push("  (No diagnosis section was found, so diagnosis names were looked for in the whole document.)");
+    const codes = tr.codes || [];
+    lines.push("");
+    lines.push(`Code-like items in the text (${codes.length}):`);
+    for (const c of codes) lines.push(`  ${c.kept ? "KEPT" : "SKIPPED"}  ${c.token}${c.code && c.code !== c.token ? " → " + c.code : ""}${c.kept ? "" : " — " + c.reason}   (“${c.line}”)`);
+    const a = (r.fields && r.fields.allergies) || {};
+    lines.push("");
+    lines.push(`Allergies: ${a.status === "nkda" ? "NKDA" : a.status === "listed" ? (a.items || []).map((x) => x.allergen).join(", ") : a.notOnFile ? "Not on File — status unknown" : "none found"}`);
+    lines.push("");
+    lines.push("--- TEXT, PAGE BY PAGE ---");
+    for (const p of pages) {
+      lines.push(`=== Page ${p.n} (${p.method}) ===`);
+      lines.push(p.text || "(no text)");
+    }
+    return lines.join("\n");
+  }
+
+  function showReadReport(report) {
+    lastReport = report;
+    const box = $("#read-report");
+    if (!box) return;
+    box.hidden = !report;
+    $("#read-report-text").textContent = report ? buildReadReport(report) : "";
+    $("#read-report-body").hidden = true;
+    $("#read-report-copy").hidden = true;
+    $("#read-report-toggle").textContent = "Show what it read";
+    $("#read-report-toggle").setAttribute("aria-expanded", "false");
+  }
+
+  function toggleReadReport() {
+    const body = $("#read-report-body");
+    const open = body.hidden;
+    body.hidden = !open;
+    $("#read-report-copy").hidden = !open;
+    $("#read-report-toggle").textContent = open ? "Hide what it read" : "Show what it read";
+    $("#read-report-toggle").setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  async function copyReadReport() {
+    const text = $("#read-report-text").textContent || "";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_err) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (_e) { /* ignore */ }
+      ta.remove();
+    }
+    toast("Copied. Cover the patient's details before sharing.");
+  }
+
+  async function applyExtractedText(text, sourceName, toastMessage, where, pages) {
     extractRaw = text;
     extractName = sourceName || "";
     showExtract();
     const lookup = await loadCodeLookup(where || "dialog");
-    const guessed = AdmissionsExtract.extractFields(text, lookup ? { lookup } : undefined);
+    const trace = {};
+    const extractOpts = { trace };
+    if (lookup) {
+      extractOpts.lookup = lookup;
+      if (typeof AdmissionsICD !== "undefined" && AdmissionsICD.suggest) extractOpts.suggest = AdmissionsICD.suggest;
+    }
+    const guessed = AdmissionsExtract.extractFields(text, extractOpts);
+    showReadReport({ sourceName, text, pages: pages || [{ n: 1, method: "pasted text", text }], trace, fields: guessed });
     // Clear values a previous import filled in, so a second file never
     // leaves the first file's details behind. Typed values are kept.
     for (const key of filledFromPdf) {
@@ -2100,12 +2213,16 @@
     setImportProgress("", "dash");
     setImportProgress("", "dialog");
     setImportProgress("Opening " + (file.name || "the file") + "...", where);
+    lastReadPages = null;
     try {
       const text = await readReferralFile(file, (message) => setImportProgress(message, where));
+      if (!lastReadPages) lastReadPages = [{ n: 1, method: fileKind(file) === "docx" ? "Word text" : "plain text", text }];
       if (where === "dash") openReferralForm();
-      const found = await applyExtractedText(text, file.name, "The file was read on this device. Please verify every item before you save.", where === "dash" ? "dialog" : where);
-      if (found === 0) {
-        setImportError("Nothing could be filled in from this file. It may be a faint scan or an unusual layout. Check the Extracted text box at the bottom of this form, and enter the details by hand.", "dialog");
+      const found = await applyExtractedText(text, file.name, "The file was read on this device. Please verify every item before you save.", where === "dash" ? "dialog" : where, lastReadPages);
+      if (bodyCharCount(text) < 200) {
+        setImportError("Couldn't read much text from this file — it may be a low-quality scan. Tap “Show what it read” to see what came through, and enter the details by hand.", "dialog");
+      } else if (found === 0) {
+        setImportError("Nothing could be filled in from this file. It may be an unusual layout. Tap “Show what it read” to see what came through, and enter the details by hand.", "dialog");
       }
     } catch (err) {
       console.error(err);
@@ -2423,6 +2540,8 @@
       if (file) importJson(file);
     });
     $("#clear-all-btn").addEventListener("click", clearAll);
+    $("#read-report-toggle").addEventListener("click", toggleReadReport);
+    $("#read-report-copy").addEventListener("click", copyReadReport);
     $("#passcode-form").addEventListener("submit", setPasscode);
     $("#remove-passcode-btn").addEventListener("click", removePasscode);
     $("#lock-now-btn").addEventListener("click", lockNow);

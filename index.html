@@ -12,7 +12,7 @@
   <title>Admissions Tracker</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="favicon.svg" />
-  <link rel="stylesheet" href="styles.css?v=20261119fast" />
+  <link rel="stylesheet" href="styles.css?v=20261119names" />
 </head>
 <body>
   <div id="lock-screen" class="lock-screen" hidden data-testid="lock-screen">
@@ -238,6 +238,16 @@
         Fields marked <strong>Please verify</strong> were filled in from the referral. Check each one against the file before you save. Anything the tracker was not sure about was left blank.
       </div>
       <p class="form-error" id="pdf-error" data-testid="pdf-error" hidden></p>
+      <div class="read-report" id="read-report" data-testid="read-report" hidden>
+        <div class="btn-row">
+          <button type="button" class="btn small" id="read-report-toggle" data-testid="read-report-toggle" aria-expanded="false">Show what it read</button>
+          <button type="button" class="btn small" id="read-report-copy" data-testid="read-report-copy" hidden>Copy</button>
+        </div>
+        <div id="read-report-body" hidden>
+          <p class="hint">This stays on this device. If you share a screenshot, cover the patient's name and other details first.</p>
+          <pre class="extract-text read-report-text" id="read-report-text" data-testid="read-report-text"></pre>
+        </div>
+      </div>
 
       <div class="form-grid">
         <label class="field">
@@ -330,9 +340,10 @@
 
   <div id="toast" class="toast" hidden data-testid="toast" role="status" aria-live="polite"></div>
 
-  <script src="vendor/pdf.min.js?v=20261119fast"></script>
-  <script src="extract.js?v=20261119fast"></script>
-  <script src="icd10.js?v=20261119fast"></script>
-  <script src="app.js?v=20261119fast"></script>
+  <script src="vendor/pdf.min.js?v=20261119names"></script>
+  <script src="dxnames.js?v=20261119names"></script>
+  <script src="extract.js?v=20261119names"></script>
+  <script src="icd10.js?v=20261119names"></script>
+  <script src="app.js?v=20261119names"></script>
 </body>
 </html>
