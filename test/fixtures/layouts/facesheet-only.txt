@@ -1,0 +1,11 @@
+ADMISSION FACE SHEET
+Resident Name: Gloria Mendez    DOB: 01/05/1937
+Admitting Facility: Valley Medical Center
+Primary Insurance: Medicare A   Policy #: 1EG4TE5MK73
+Responsible Party: Luis Mendez (son)  Phone: 555-882-1010
+Diagnosis Information
+Code      Description                                Rank
+J69.0     Pneumonitis due to inhalation of food      Primary
+J96.01    Acute respiratory failure with hypoxia     Secondary
+G20.A1    Parkinson's disease without dyskinesia     Other
+Allergies: NKDA

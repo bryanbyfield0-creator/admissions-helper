@@ -1,0 +1,20 @@
+Riverside Regional Medical Center
+Discharge Summary
+Patient: WALKER, DORIS J    MRN: 4410982    FIN: 99120344
+DOB: 03/14/1941    Age: 85 years    Sex: Female
+Admit Date: 11/10/2026    Discharge Date: 11/19/2026
+Attending: Patel, Raj MD
+
+Discharge Diagnoses
+Principal: Acute on chronic diastolic heart failure (I50.33)
+Secondary:
+  Chronic kidney disease, stage 3a (N18.31)
+  Paroxysmal atrial fibrillation (I48.0)
+  Type 2 diabetes mellitus with hyperglycemia (E11.65)
+
+Allergies
+codeine - nausea
+latex - rash
+
+Hospital Course
+85 yo F admitted with dyspnea and weight gain, diuresed with IV furosemide.

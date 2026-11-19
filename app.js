@@ -1616,6 +1616,16 @@
     });
   }
 
+  function createTessWorker() {
+    return Tesseract.createWorker("eng", 1, {
+      workerPath: vendorUrl("vendor/tesseract/worker.min.js"),
+      corePath: vendorUrl("vendor/tesseract"),
+      langPath: vendorUrl("vendor/tesseract/lang"),
+      gzip: true,
+      workerBlobURL: true,
+    });
+  }
+
   let tessWorkerPromise = null;
 
   async function getTessWorker(onProgress) {
@@ -1626,13 +1636,7 @@
         if (typeof Tesseract === "undefined" || typeof Tesseract.createWorker !== "function") {
           throw new Error("The on-device text reader (OCR) could not be loaded. Enter the details by hand.");
         }
-        return await Tesseract.createWorker("eng", 1, {
-          workerPath: vendorUrl("vendor/tesseract/worker.min.js"),
-          corePath: vendorUrl("vendor/tesseract"),
-          langPath: vendorUrl("vendor/tesseract/lang"),
-          gzip: true,
-          workerBlobURL: true,
-        });
+        return await createTessWorker();
       })();
     }
     try {
@@ -1641,6 +1645,51 @@
       tessWorkerPromise = null;
       throw err;
     }
+  }
+
+  // Extra OCR workers so several scanned pages are read at once. They are
+  // stopped again after a minute of no use to give the memory back.
+  let extraWorkers = [];
+  let extraWorkerTimer = null;
+
+  function ocrParallelLimit() {
+    const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 2;
+    const memory = (typeof navigator !== "undefined" && navigator.deviceMemory) || 4;
+    const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    let limit = Math.max(1, Math.min(3, cores - 1));
+    if (touch || memory <= 2) limit = Math.min(limit, 2);
+    return limit;
+  }
+
+  async function getOcrWorkers(count, onProgress) {
+    const first = await getTessWorker(onProgress);
+    clearTimeout(extraWorkerTimer);
+    const wanted = Math.max(0, count - 1);
+    while (extraWorkers.length < wanted) {
+      extraWorkers.push(createTessWorker().catch((err) => { console.warn("Extra OCR worker failed", err); return null; }));
+    }
+    const extras = (await Promise.all(extraWorkers.slice(0, wanted))).filter(Boolean);
+    return [first, ...extras];
+  }
+
+  function scheduleExtraWorkerShutdown() {
+    clearTimeout(extraWorkerTimer);
+    extraWorkerTimer = setTimeout(async () => {
+      const list = extraWorkers;
+      extraWorkers = [];
+      for (const p of list) {
+        try { const w = await p; if (w) await w.terminate(); } catch (_err) { /* already gone */ }
+      }
+    }, 60000);
+  }
+
+  // Start the OCR reader in the background (script, engine and English data)
+  // so the first scanned page does not wait for it. Safe to call many times.
+  let ocrWarmStarted = false;
+  function warmUpOcr() {
+    if (ocrWarmStarted) return;
+    ocrWarmStarted = true;
+    getTessWorker().catch((err) => { ocrWarmStarted = false; console.warn("OCR warm-up failed", err); });
   }
 
   function releaseCanvas(canvas) {
@@ -1679,10 +1728,10 @@
     );
   }
 
-  async function ocrCanvas(canvas, onProgress, label) {
-    await emitProgress(onProgress, label);
-    const worker = await getTessWorker(onProgress);
-    await emitProgress(onProgress, label);
+  async function ocrCanvas(canvas, onProgress, label, givenWorker) {
+    if (label) await emitProgress(onProgress, label);
+    const worker = givenWorker || await getTessWorker(onProgress);
+    if (label) await emitProgress(onProgress, label);
     const result = await worker.recognize(canvas);
     const raw = String((result && result.data && result.data.text) || "").replace(/\f/g, "\n").trim();
     return repairOcrIcdCodes(raw);
@@ -1788,29 +1837,64 @@
       }
       throw err;
     }
-    const pages = [];
     const total = doc.numPages;
+    // Pass 1: the real text layer of every page (fast), and which pages are scans.
+    const pageTexts = new Array(total).fill("");
+    const needOcr = [];
     for (let i = 1; i <= total; i++) {
       await emitProgress(onProgress, "Reading page " + i + " of " + total + "...");
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
       const layerText = textFromPdfItems(content);
-      let pageText = layerText;
+      pageTexts[i - 1] = layerText;
       const coverage = significantCharCount(layerText) < TEXT_LAYER_MIN_CHARS ? 1 : await pageImageCoverage(page);
-      if (pageNeedsOcr(layerText, coverage, content, page)) {
-        let canvas;
-        try {
-          canvas = await renderPdfPageToCanvas(page);
-          const ocrText = await ocrCanvas(canvas, onProgress, "Reading scanned page " + i + " of " + total + "...");
-          pageText = [layerText, ocrText].filter(Boolean).join("\n").trim();
-        } finally {
-          releaseCanvas(canvas);
-          if (page && typeof page.cleanup === "function") page.cleanup();
-        }
-      }
-      if (pageText) pages.push(pageText);
+      if (pageNeedsOcr(layerText, coverage, content, page)) needOcr.push(i);
+      else if (typeof page.cleanup === "function") page.cleanup();
     }
-    return pages.join("\n\n").trim();
+    // Pass 2: OCR the scanned pages, several at a time.
+    if (needOcr.length) {
+      let latest = needOcr[0];
+      const scanLabel = () => "Reading scanned page " + latest + " of " + total +
+        (needOcr.length > 1 ? " (" + done + " of " + needOcr.length + " scanned pages done)" : "") + "...";
+      let done = 0;
+      await emitProgress(onProgress, scanLabel());
+      const workers = await getOcrWorkers(Math.min(needOcr.length, ocrParallelLimit()), onProgress);
+      await emitProgress(onProgress, scanLabel());
+      const queue = needOcr.slice();
+      // Pages are drawn one at a time (pdf.js in Safari can mix up pages drawn
+      // at the same moment); only the OCR itself runs in parallel.
+      let renderChain = Promise.resolve();
+      const renderInTurn = (page) => {
+        const next = renderChain.then(() => renderPdfPageToCanvas(page));
+        renderChain = next.catch(() => {});
+        return next;
+      };
+      const runLane = async (worker) => {
+        while (queue.length) {
+          const i = queue.shift();
+          latest = Math.max(latest, i);
+          if (typeof onProgress === "function") onProgress(scanLabel());
+          const page = await doc.getPage(i);
+          let canvas;
+          try {
+            canvas = await renderInTurn(page);
+            const ocrText = await ocrCanvas(canvas, onProgress, "", worker);
+            pageTexts[i - 1] = [pageTexts[i - 1], ocrText].filter(Boolean).join("\n").trim();
+          } finally {
+            releaseCanvas(canvas);
+            if (page && typeof page.cleanup === "function") page.cleanup();
+          }
+          done += 1;
+          if (typeof onProgress === "function") onProgress(scanLabel());
+        }
+      };
+      try {
+        await Promise.all(workers.map(runLane));
+      } finally {
+        scheduleExtraWorkerShutdown();
+      }
+    }
+    return pageTexts.filter(Boolean).join("\n\n").trim();
   }
 
   function heicUnsupportedMessage() {
@@ -2298,6 +2382,12 @@
     const noFileMsg = "That did not come through as a file. Save the referral to your computer first (for example, Download in your e-mail), then drop it here or use Choose file.";
     bindDropzone($("#dash-dropzone"), (file) => importReferralFile(file, "dash"), $("#dash-file-input"), () => setImportError(noFileMsg, dialogIsOpen() ? "dialog" : "dash"));
     bindDropzone($("#dialog-dropzone"), (file) => importReferralFile(file, "dialog"), $("#pdf-upload"), () => setImportError(noFileMsg, "dialog"));
+    for (const zone of [$("#dash-dropzone"), $("#dialog-dropzone")]) {
+      if (!zone) continue;
+      for (const type of ["pointerenter", "pointerdown", "focusin", "dragenter", "touchstart"]) {
+        zone.addEventListener(type, warmUpOcr, { once: true, passive: true });
+      }
+    }
     document.addEventListener("dragover", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
     document.addEventListener("drop", (e) => { if (hasDragFiles(e)) e.preventDefault(); });
     $("#dash-paste-toggle").addEventListener("click", () => {
@@ -2367,4 +2457,7 @@
     AdmissionsICD.ensureLoaded().catch((err) => console.warn(err));
   }
   boot();
+  // Get the OCR reader ready in the background once the page is idle.
+  const idle = typeof requestIdleCallback === "function" ? (fn) => requestIdleCallback(fn, { timeout: 4000 }) : (fn) => setTimeout(fn, 2500);
+  idle(() => warmUpOcr());
 })();

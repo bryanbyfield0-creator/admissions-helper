@@ -852,7 +852,7 @@
     const labeled = pick(text, [
       /Referring\s*(?:Hospital|Facility|Source)\s*[:\-]\s*([^\n]+)/i,
       /Discharg(?:e|ing)\s*(?:From|Hospital|Facility)\s*[:\-]\s*([^\n]+)/i,
-      /(?:^|\n)[ \t]*(?:Hospital|Sending\s+Facility|Transferring\s+Facility)(?:\s*Name)?\s*[:\-]\s*([^\n]+)/i,
+      /(?:^|\n)[ \t]*(?:Hospital|Sending\s+Facility|Transferring\s+Facility|Admitting\s+(?:Hospital|Facility))(?:\s*Name)?\s*[:\-]\s*([^\n]+)/i,
     ]);
     if (labeled) return cutAtNextLabel(labeled);
     const lines = String(text).split(/\r?\n/).slice(0, 12);
@@ -860,6 +860,7 @@
       let l = raw.trim();
       if (!l || l.length > 80 || /[:@]/.test(l) || /\d{3,}/.test(l)) continue;
       if (/printed|page\s+\d/i.test(l)) continue;
+      if (detectHeader(l)) continue; // "Hospital Problems", "Hospital Course"
       if (/\b(?:hospital|medical\s+center|medical\s+centre|health\s+(?:system|center)|regional\s+medical|memorial|infirmary)\b/i.test(l)) {
         l = l.split(/\s{2,}/)[0].replace(/\s+(?:inpatient|outpatient|face\s*sheet|patient\s+face\s*sheet).*$/i, "").trim();
         return /^[A-Z0-9 .,'&\-]+$/.test(l) ? titleCaseName(l).replace(/\bSt\b/g, "St") : l;

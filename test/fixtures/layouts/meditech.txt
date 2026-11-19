@@ -1,0 +1,8 @@
+MEDITECH  ** LIVE **  ST. JUDE HOSPITAL  RUN DATE: 11/18/26  RUN TIME: 1532
+PATIENT: NGUYEN,THANH  ACCT#: V00012345  LOC: 3N  ROOM: 312-A
+AGE/SEX: 79/M   ADM: 11/14/26   ATTEND: Lee,Susan MD
+
+DIAGNOSIS: Right hip fracture s/p ORIF - S72.001A
+           Osteoporosis - M81.0
+           Dementia without behavioral disturbance - F03.90
+ALLERGIES: Morphine (Hives), Bactrim (Rash)

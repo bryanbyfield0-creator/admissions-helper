@@ -12,7 +12,7 @@ Open it at: https://bryanbyfield0-creator.github.io/admissions-helper/
 - Drop a referral PDF, Word file (.docx), text, or a photo (JPG, PNG, or HEIC) onto the dashboard, or paste email text, then check the filled-in fields before you save. Every item filled in from a referral is marked **Please verify** until you edit or confirm it, and each list has a **Clear all** button. Anything the tracker is not sure about is left blank instead of guessed.
   - **Diagnoses** are read only from diagnosis, problem list, medical history and assessment sections. A code is kept only if it is in the official CMS ICD-10-CM code set (bundled with the app), and the official description is shown. Codes in contacts, insurance, provider, isolation and timestamp lines are ignored. Diagnoses listed without a code stay uncoded; suggested codes are offered in a picker but never filled in for you.
   - **Allergies** are read only from the allergy section, up to the next section. NKDA / NKA / “No known allergies” is shown as NKDA. A reaction is filled in only when the referral names one (rash, hives, swelling, and so on). If no allergy section is found, the form says “None found — check the file.”
-  - Image-only scanned PDFs and photos are read on this device with OCR.
+  - Image-only scanned PDFs, faxed PDFs (a scanned picture with only a fax header as real text) and photos are read on this device with OCR. Pages that already have real text are not OCR'd. Several scanned pages are read at once, and the reader starts loading in the background when the page opens.
 - Track each referral through New, Reviewing, Pending insurance auth, Accepted, Admitted, or Declined
 - Work through an admission checklist with a progress bar
 - See today's expected admits, items still waiting on a decision, and a simple admission rate
@@ -48,7 +48,7 @@ pdf.js (Apache License 2.0) is included locally to read PDF text and to render s
 
 ```
 for t in test/*.test.js; do node "$t"; done   # parser, allergy, ICD-10 and synthetic-referral tests
-python3 test/e2e.py && python3 test/qa_e2e.py && python3 test/ocr_e2e.py   # browser tests (Playwright)
+python3 test/e2e.py && python3 test/qa_e2e.py && python3 test/ocr_e2e.py && python3 test/upload_e2e.py   # browser tests (Playwright; upload tests run in Chromium and WebKit)
 node scripts/compare-before-after.js           # item counts before vs after the parser rewrite
 ```
 

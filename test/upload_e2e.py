@@ -11,6 +11,7 @@ from e2e import BASE, ROOT, start_server, sync_playwright, expect, diagnosis_row
 FAX = ROOT / "test" / "fixtures" / "epic" / "epic-cellulitis-fax-stamped.pdf"
 TEXT_PDF = ROOT / "test" / "sample-referral.pdf"
 BLANKISH = ROOT / "test" / "fixtures" / "nothing-to-find.txt"
+MULTI = ROOT / "test" / "fixtures" / "epic" / "multi-6page-scan.pdf"  # 2 + 1 + 1 + 2 scanned pages, read in parallel
 
 
 def open_fresh(browser):
@@ -90,6 +91,16 @@ def run(browser, engine):
     # 5. A readable file with nothing to fill in shows a clear message.
     page.get_by_test_id("dash-file-input").set_input_files(str(BLANKISH))
     expect(page.get_by_test_id("pdf-error")).to_contain_text("Nothing could be filled in", timeout=30000)
+    page.get_by_test_id("cancel-referral-btn").click()
+
+    # 6. Several scanned pages are read in parallel; every page keeps its own text, in order.
+    page.get_by_test_id("dash-file-input").set_input_files(str(MULTI))
+    expect(page.get_by_test_id("extract-panel")).to_be_visible(timeout=120000)
+    page.wait_for_function("() => document.querySelector('[data-testid=dash-import-progress]').hidden", timeout=120000)
+    txt = page.get_by_test_id("extract-text").inner_text().upper()
+    order = [txt.find("DELACRUZ"), txt.find("HARTLEY"), txt.find("PRUITT"), txt.rfind("DELACRUZ")]
+    assert all(i >= 0 for i in order) and order == sorted(order) and order[3] > order[2], (engine, order)
+    assert txt.count("PAGE 1 OF 4") >= 2 and txt.count("PAGE 4 OF 4") >= 2, (engine, "a scanned page was lost or duplicated")
     page.get_by_test_id("cancel-referral-btn").click()
 
     assert not errors, f"{engine} errors: {errors}"
